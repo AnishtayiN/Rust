@@ -68,18 +68,32 @@ jobs:
       - name: Publish diagnostics as annotations
         if: failure()
         run: |
-          # Debug aid: annotations stay readable through the REST API even when
-          # the raw job log cannot be fetched; echo the tail of each step log.
           python3 - <<'PYEOF'
           import pathlib
           for name in ("step.log", "verify.log"):
               path = pathlib.Path("/tmp") / name
               if not path.is_file():
                   continue
-              for line in path.read_text(errors="replace").splitlines()[-40:]:
+              lines = path.read_text(errors="replace").splitlines()
+              keep = [
+                  (index, line)
+                  for index, line in enumerate(lines)
+                  if any(key in line for key in ("error", "Error", "Caused by", "feature", "edition", "requires", "warning:"))
+              ]
+              if not keep:
+                  keep = list(enumerate(lines[-25:], start=len(lines) - 25))
+              for index, line in keep[:40]:
                   line = line.replace("%", "%25").replace("\r", "")
-                  print(f"::error::{name}: {line}")
+                  print(f"::error::{name}:{index}: {line}")
           PYEOF
+
+      - name: Upload the step logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: lockfile-logs
+          path: /tmp/step.log
+          if-no-files-found: ignore
 
       - name: Report drift against what the MSRV resolver would pick today
         if: ${{ inputs.refresh_lockfile != true }}
