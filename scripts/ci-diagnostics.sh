@@ -40,7 +40,15 @@ done
 
 if [ ! -s "$OUT" ]; then
     echo "ci-diagnostics: nothing to report"
-    exit 0
+    # Also surface the first few error lines as annotations: they show up next to
+# the failing step even when the comment cannot be created.
+grep -h -m 12 -E "^error(\[|:)|^ *error\[E|cannot find|not supported by|failed to" "$OUT" 2>/dev/null \
+    | cut -c1-400 \
+    | while IFS= read -r line; do
+        printf '::error::%s\n' "$(printf "%s" "$line" | tr -d "\r" | sed 's/%/%25/g')"
+      done
+
+exit 0
 fi
 
 if command -v python3 >/dev/null 2>&1; then
@@ -50,7 +58,15 @@ elif command -v python >/dev/null 2>&1; then
 else
     echo "ci-diagnostics: no python interpreter; printing the log instead" >&2
     tail -c 4000 "$OUT"
-    exit 0
+    # Also surface the first few error lines as annotations: they show up next to
+# the failing step even when the comment cannot be created.
+grep -h -m 12 -E "^error(\[|:)|^ *error\[E|cannot find|not supported by|failed to" "$OUT" 2>/dev/null \
+    | cut -c1-400 \
+    | while IFS= read -r line; do
+        printf '::error::%s\n' "$(printf "%s" "$line" | tr -d "\r" | sed 's/%/%25/g')"
+      done
+
+exit 0
 fi
 
 # shellcheck disable=SC2086
@@ -86,5 +102,13 @@ except Exception as error:  # noqa: BLE001 - diagnostics must never fail the job
     print("ci-diagnostics: could not post the comment (" + repr(error) + "); printing instead")
     print(body[-8000:])
 PYEOF
+
+# Also surface the first few error lines as annotations: they show up next to
+# the failing step even when the comment cannot be created.
+grep -h -m 12 -E "^error(\[|:)|^ *error\[E|cannot find|not supported by|failed to" "$OUT" 2>/dev/null \
+    | cut -c1-400 \
+    | while IFS= read -r line; do
+        printf '::error::%s\n' "$(printf "%s" "$line" | tr -d "\r" | sed 's/%/%25/g')"
+      done
 
 exit 0

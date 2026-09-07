@@ -30,7 +30,9 @@ on:
     branches: [main, "arena/**"]
 
 permissions:
-  contents: read
+  # Only needed so that a failing job can attach its log tail to the commit
+  # (scripts/ci-diagnostics.sh); nothing here pushes.
+  contents: write
 
 env:
   # Must match the channel in rust-toolchain.toml.
