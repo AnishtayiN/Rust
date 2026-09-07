@@ -220,11 +220,13 @@ class Autopin:
         _, packages = read_lock(self.lock)
         self.packages = [package for package in packages if package["source"].startswith("registry+")]
 
+    def versions_of(self, name: str) -> list[str]:
+        """Locked versions of `name` — a name can appear more than once."""
+        return [package["version"] for package in self.packages if package["name"] == name]
+
     def current_version(self, name: str) -> str | None:
-        for package in self.packages:
-            if package["name"] == name:
-                return package["version"]
-        return None
+        versions = self.versions_of(name)
+        return versions[0] if versions else None
 
     # -- problem detection -------------------------------------------------
     def index_problems(self) -> list[dict]:
@@ -315,7 +317,7 @@ class Autopin:
         """Try to move `name` to an older release; returns (changed, cargo output)."""
         ordered = self.candidates(name, version, ceiling)
         if not ordered:
-            print(f"  {name} {version}: {reason} -> nothing older that is MSRV-clean")
+            print(f"  {name} {version}: {reason} -> no older usable release left to try")
             return False, ""
         last_output = ""
         for candidate in ordered:
@@ -337,7 +339,7 @@ class Autopin:
     def move_offender(self, problem: dict, depth: int = 0) -> bool:
         """Move the offending crate, or one of its ancestors, to a usable version."""
         name, version = problem["name"], problem["version"]
-        if self.current_version(name) != version:
+        if version not in self.versions_of(name):
             return True  # already resolved, usually because an ancestor moved
         ceiling = None if not problem.get("parse_only") else (EDITION_2024[0], EDITION_2024[1] - 1, 99)
         changed, output = self.downgrade(name, version, problem["reason"], ceiling)
@@ -348,9 +350,12 @@ class Autopin:
             return False
         ancestors = ancestors_from_cargo_error(output) or parents_of(self.packages, name)
         for ancestor in ancestors:
-            ancestor_version = self.current_version(ancestor)
-            if not ancestor_version or ancestor in self.stuck:
-                continue
+            # Move the newest locked instance of the ancestor; older duplicates
+            # are usually pulled in by something else entirely.
+            candidates_versions = self.versions_of(ancestor)
+            if not candidates_versions or all((ancestor, item) in self.stuck for item in candidates_versions):
+                continue  # every locked instance of the ancestor is a dead end
+            ancestor_version = max(candidates_versions, key=lambda text: semver(text) or (0, 0, 0, 0, ""))
             if self.move_offender(
                 {
                     "name": ancestor,
@@ -362,7 +367,7 @@ class Autopin:
             ):
                 self.refresh()
                 return True
-        self.stuck.add(name)
+        self.stuck.add((name, version))
         print(f"  {name} {version}: giving up (neither it nor its ancestors can move)")
         return False
 
@@ -412,7 +417,7 @@ def main() -> int:
     parser.add_argument("--msrv", help="MSRV to target (default: rust-version from Cargo.toml)")
     parser.add_argument("--resolve-toolchain", default="stable", help="toolchain used for `cargo update`")
     parser.add_argument("--msrv-toolchain", help="toolchain used to verify (default: the MSRV)")
-    parser.add_argument("--rounds", type=int, default=12)
+    parser.add_argument("--rounds", type=int, default=25)
     parser.add_argument(
         "--list",
         action="store_true",
