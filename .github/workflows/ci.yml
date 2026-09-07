@@ -78,24 +78,16 @@ jobs:
           # proves the lock is in sync with Cargo.toml.
           { cargo fetch --locked; python3 scripts/check-msrv-lock.py; } 2>&1 | tee "${RUNNER_TEMP:-/tmp}/verify.log"
 
-      # `--locked` refuses a lockfile that differs from what cargo resolves —
-      # usually because a version was pinned by hand.  Show the resolver's own
-      # answer instead of making someone re-derive it from a trace.
-      - name: Show what a re-resolution would change
+      # Cargo only says "the lockfile needs to be updated" when --locked is
+      # refused, never where it disagrees.  Run the helper that answers that: it
+      # re-resolves with cargo, re-applies scripts/msrv-pins.toml, prints the
+      # pinned crates from both lockfiles side by side and reports whether the
+      # regenerated one is accepted (the committed one is restored afterwards).
+      # The report ends up as a comment on the pull request via
+      # scripts/ci-diagnostics.sh.
+      - name: Diagnose the lockfile
         if: failure()
-        run: |
-          cp Cargo.lock "${RUNNER_TEMP:-/tmp}/committed.Cargo.lock"
-          rustup toolchain install stable --profile minimal >/dev/null 2>&1 || true
-          cargo +stable generate-lockfile \
-            --config 'resolver.incompatible-rust-versions="fallback"' >/dev/null 2>&1 || true
-          {
-            echo "diff -u committed/Cargo.lock -> freshly resolved Cargo.lock"
-            diff -u "${RUNNER_TEMP:-/tmp}/committed.Cargo.lock" Cargo.lock | head -c 12000
-          } >"${RUNNER_TEMP:-/tmp}/lockdiff.log" 2>&1 || true
-          cat "${RUNNER_TEMP:-/tmp}/lockdiff.log"
-          # Mirror it into an annotation: raw job logs are not reachable from
-          # every environment, check annotations are.
-          python3 -c 'import pathlib,sys; t=pathlib.Path(sys.argv[1]).read_text(errors="replace")[:3000]; print("::warning::" + t.replace("%", "%25").replace("\r", "").replace("\n", "%0A"))' "${RUNNER_TEMP:-/tmp}/lockdiff.log"
+        run: bash scripts/diagnose-lockfile.sh
 
       # A freshly generated lockfile has never been compiled, and a manifest
       # scan cannot catch every offender: rowan 0.15.18/0.15.19, for example,

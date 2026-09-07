@@ -625,6 +625,11 @@ def main() -> int:
              "declare no rust-version (the ones only a build can catch), with a candidate version",
     )
     parser.add_argument(
+        "--print-pins",
+        action="store_true",
+        help="print the curated pins as `name version` lines and exit (used by scripts/diagnose-lockfile.sh)",
+    )
+    parser.add_argument(
         "--list",
         action="store_true",
         help="only report which locked releases are too new and what they would move to",
@@ -649,6 +654,11 @@ def main() -> int:
     autopin = Autopin(root, msrv, cargo_for(args.resolve_toolchain), cargo_for(args.msrv_toolchain or msrv),
                       oracle=args.oracle,
                       pins_file=pathlib.Path(args.pins_file) if args.pins_file else None)
+
+    if args.print_pins:
+        for name, want in sorted(autopin.pins.items()):
+            print(f"{name} {want}")
+        return 0
 
     if args.list:
         autopin.refresh()
