@@ -6,7 +6,7 @@
 # Actions log nor the artifact store is reachable from every environment
 # (sandboxes, restricted networks, no browser).  The REST API for commit
 # comments is, so jobs tee the interesting command output into
-# "$RUNNER_TEMP"/{step,verify,build}.log and call this script on failure, which
+# "$RUNNER_TEMP/*.log and call this script on failure, which
 # turns those files into a single comment on the commit under test.
 #
 # Best effort by design: it always exits 0 so that a diagnostics hiccup can
@@ -27,7 +27,7 @@ OUT="${DIAG_FILE:-$WORK_DIR/diag.md}"
 LIMIT="${DIAG_BYTES:-45000}"
 
 : > "$OUT"
-for file in "$WORK_DIR/step.log" "$WORK_DIR/verify.log" "$WORK_DIR/build.log"; do
+for file in "$WORK_DIR/step.log" "$WORK_DIR/verify.log" "$WORK_DIR/build.log" "$WORK_DIR"/*.log; do
     [ -f "$file" ] || continue
     {
         echo "#### $(basename "$file")"

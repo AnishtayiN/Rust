@@ -72,6 +72,22 @@ jobs:
           # proves the lock is in sync with Cargo.toml.
           { cargo fetch --locked; python3 scripts/check-msrv-lock.py; } 2>&1 | tee "${RUNNER_TEMP:-/tmp}/verify.log"
 
+      # `--locked` refuses a lockfile that differs from what cargo resolves —
+      # usually because a version was pinned by hand.  Show the resolver's own
+      # answer instead of making someone re-derive it from a trace.
+      - name: Show what a re-resolution would change
+        if: failure()
+        run: |
+          cp Cargo.lock "${RUNNER_TEMP:-/tmp}/committed.Cargo.lock"
+          rustup toolchain install stable --profile minimal >/dev/null 2>&1 || true
+          cargo +stable generate-lockfile \
+            --config 'resolver.incompatible-rust-versions="fallback"' >/dev/null 2>&1 || true
+          {
+            echo "diff -u committed/Cargo.lock -> freshly resolved Cargo.lock"
+            diff -u "${RUNNER_TEMP:-/tmp}/committed.Cargo.lock" Cargo.lock | head -c 12000
+          } >"${RUNNER_TEMP:-/tmp}/lockdiff.log" 2>&1 || true
+          cat "${RUNNER_TEMP:-/tmp}/lockdiff.log"
+
       # A freshly generated lockfile has never been compiled, and a manifest
       # scan cannot catch every offender: rowan 0.15.18/0.15.19, for example,
       # need `ptr_addr_eq` (stable since Rust 1.76) while declaring no
