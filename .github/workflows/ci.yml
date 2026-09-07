@@ -74,17 +74,11 @@ jobs:
               path = pathlib.Path("/tmp") / name
               if not path.is_file():
                   continue
-              lines = path.read_text(errors="replace").splitlines()
-              keep = [
-                  (index, line)
-                  for index, line in enumerate(lines)
-                  if any(key in line for key in ("error", "Error", "Caused by", "feature", "edition", "requires", "warning:"))
-              ]
-              if not keep:
-                  keep = list(enumerate(lines[-25:], start=len(lines) - 25))
-              for index, line in keep[:40]:
-                  line = line.replace("%", "%25").replace("\r", "")
-                  print(f"::error::{name}:{index}: {line}")
+              text = path.read_text(errors="replace")
+              # One annotation per log file so nothing gets lost to GitHub's
+              # annotation de-duplication.
+              blob = text.replace("\r", "").replace("%", "%25").replace("\n", "%0A")
+              print(f"::error::{name} ({len(text)} bytes) ::{blob}")
           PYEOF
 
       - name: Upload the step logs
