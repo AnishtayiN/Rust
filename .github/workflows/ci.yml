@@ -49,8 +49,9 @@ jobs:
       - name: Refresh the lockfile when requested (or when none is committed)
         id: resolve
         run: |
+          set -o pipefail
           if [ "${{ inputs.refresh_lockfile }}" = "true" ] || [ ! -f Cargo.lock ]; then
-            RESOLVE_TOOLCHAIN=stable ./scripts/refresh-lockfile.sh --full
+            RESOLVE_TOOLCHAIN=stable ./scripts/refresh-lockfile.sh --full 2>&1 | tee /tmp/step.log
             echo "generated=true" >> "$GITHUB_OUTPUT"
           else
             echo "generated=false" >> "$GITHUB_OUTPUT"
@@ -58,11 +59,27 @@ jobs:
 
       - name: Verify the lockfile is readable and complete for the pinned cargo
         run: |
+          set -o pipefail
           # `cargo` here is the pinned 1.75.0 toolchain (rust-toolchain.toml);
           # `fetch --locked` downloads + unpacks every locked crate and fails
           # on the first manifest this cargo cannot parse.
-          cargo fetch --locked
-          python3 scripts/check-msrv-lock.py
+          { cargo fetch --locked; python3 scripts/check-msrv-lock.py; } 2>&1 | tee /tmp/verify.log
+
+      - name: Publish diagnostics as annotations
+        if: failure()
+        run: |
+          # Debug aid: annotations stay readable through the REST API even when
+          # the raw job log cannot be fetched; echo the tail of each step log.
+          python3 - <<'PYEOF'
+          import pathlib
+          for name in ("step.log", "verify.log"):
+              path = pathlib.Path("/tmp") / name
+              if not path.is_file():
+                  continue
+              for line in path.read_text(errors="replace").splitlines()[-40:]:
+                  line = line.replace("%", "%25").replace("\r", "")
+                  print(f"::error::{name}: {line}")
+          PYEOF
 
       - name: Report drift against what the MSRV resolver would pick today
         if: ${{ inputs.refresh_lockfile != true }}
