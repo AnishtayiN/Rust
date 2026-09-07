@@ -85,6 +85,18 @@ else
     ${RESOLVE_CARGO} update --config "${MSRV_POLICY}"
 fi
 
+if command -v python3 >/dev/null 2>&1; then
+    PY=python3
+else
+    PY=python
+fi
+
+# The MSRV-aware resolver only *prefers* compatible versions: it still hands
+# back the odd crate that is too new (e.g. the wasm-only wit-bindgen subtree).
+# Pin those back one by one until the pinned toolchain accepts the graph.
+echo "==> pinning dependencies that are still too new for Rust ${MSRV}"
+$PY scripts/msrv-autopin.py --resolve-toolchain "${RESOLVE_TOOLCHAIN}" --msrv-toolchain "${MSRV_TOOLCHAIN}"
+
 echo "==> checking the result against cargo ${MSRV_TOOLCHAIN}"
 if [[ "${have_rustup}" == 1 ]]; then
     # `fetch` downloads + unpacks every locked crate, which is exactly what
@@ -94,13 +106,7 @@ if [[ "${have_rustup}" == 1 ]]; then
     ${MSRV_CARGO} fetch --locked
 fi
 
-if command -v python3 >/dev/null 2>&1; then
-    python3 scripts/check-msrv-lock.py
-elif command -v python >/dev/null 2>&1; then
-    python scripts/check-msrv-lock.py
-else
-    echo "warning: python not found, skipping the MSRV manifest check" >&2
-fi
+$PY scripts/check-msrv-lock.py
 
 echo
 echo "Cargo.lock refreshed: $(grep -c '^\[\[package\]\]' Cargo.lock) packages."
