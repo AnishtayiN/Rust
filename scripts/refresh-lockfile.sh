@@ -94,7 +94,7 @@ fi
 # The MSRV-aware resolver only *prefers* compatible versions: it still hands
 # back the odd crate that is too new (e.g. the wasm-only wit-bindgen subtree).
 # Pin those back one by one until the pinned toolchain accepts the graph.
-echo "==> pinning dependencies that are still too new for Rust ${MSRV}"
+echo "==> pinning dependencies that are still too new for Rust ${MSRV_TOOLCHAIN}"
 $PY scripts/msrv-autopin.py --resolve-toolchain "${RESOLVE_TOOLCHAIN}" --msrv-toolchain "${MSRV_TOOLCHAIN}"
 
 echo "==> checking the result against cargo ${MSRV_TOOLCHAIN}"

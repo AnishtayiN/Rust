@@ -28,7 +28,7 @@ on:
     branches: [main, "arena/**"]
 
 permissions:
-  contents: read
+  contents: write
 
 env:
   # Must match the channel in rust-toolchain.toml; kept here so the build
@@ -69,25 +69,18 @@ jobs:
         if: failure()
         run: |
           python3 - <<'PYEOF'
-          import pathlib
+          import math, pathlib
           for name in ("step.log", "verify.log"):
               path = pathlib.Path("/tmp") / name
               if not path.is_file():
                   continue
               text = path.read_text(errors="replace")
-              # One annotation per log file so nothing gets lost to GitHub's
-              # annotation de-duplication.
-              blob = text.replace("\r", "").replace("%", "%25").replace("\n", "%0A")
-              print(f"::error::{name} ({len(text)} bytes) ::{blob}")
+              text = text.replace("\r", "").replace("%", "%25").replace("\n", "%0A")
+              size = 1500
+              parts = math.ceil(len(text) / size)
+              for index in range(parts):
+                  print(f"::error::{name} {index + 1}/{parts}::{text[index * size:(index + 1) * size]}")
           PYEOF
-
-      - name: Upload the step logs
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: lockfile-logs
-          path: /tmp/step.log
-          if-no-files-found: ignore
 
       - name: Report drift against what the MSRV resolver would pick today
         if: ${{ inputs.refresh_lockfile != true }}
@@ -111,6 +104,15 @@ jobs:
           name: cargo-lock
           path: Cargo.lock
           if-no-files-found: error
+
+      - name: Commit the generated lockfile back (bootstrap only)
+        if: ${{ steps.resolve.outputs.generated == 'true' }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -f Cargo.lock
+          git commit -m "Cargo.lock: resolved for the pinned MSRV toolchain" || echo "nothing to commit"
+          git push origin "HEAD:${GITHUB_REF_NAME}" 
 
   windows:
     name: Windows executable (Windows 7 - 11)

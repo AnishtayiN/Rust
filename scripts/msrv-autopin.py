@@ -276,9 +276,41 @@ class Autopin:
             sys.stdout.write(output[-3000:])
         return False, problems
 
+    def current_version(self, name: str) -> str | None:
+        for package in self.locked_registry_packages():
+            if package.get("name") == name:
+                return package.get("version")
+        return None
+
     # -- driver ------------------------------------------------------------
+    def resolve_problem(self, problem: dict, depth: int = 0) -> bool:
+        """Move `problem`'s package to a usable version, its parents if need be."""
+        name = problem["name"]
+        version = self.current_version(name) or problem["version"]
+        if version != problem["version"]:
+            return True  # already handled (usually because an ancestor moved)
+        if self.downgrade(name, version, problem["reason"]):
+            return True
+        if depth >= 4:
+            return False
+        # The crate itself has no usable release: drop it out of the graph by
+        # moving one of the crates that depend on it to an older version.
+        packages = self.locked_registry_packages()
+        for parent_name in parents_of(packages, name):
+            parent_version = next((p["version"] for p in packages if p.get("name") == parent_name), None)
+            if not parent_version or (parent_name, parent_version) in self.blacklist:
+                continue
+            if self.resolve_problem(
+                {"name": parent_name, "version": parent_version, "reason": f"requires {name} {version}"},
+                depth + 1,
+            ):
+                return True
+        print(f"  {name} {version}: giving up (no version works and no ancestor can move)")
+        return False
+
     def fix(self, rounds: int) -> list[dict]:
         unresolved: list[dict] = []
+        seen_unresolved: set[tuple[str, str]] = set()
         for round_number in range(1, rounds + 1):
             problems = self.problems()
             if not problems:
@@ -286,26 +318,16 @@ class Autopin:
                 if ok:
                     return []
                 problems = fetch_problems
+            problems = [problem for problem in problems if (problem["name"], problem["version"]) not in seen_unresolved]
+            if not problems:
+                break
             print(f"round {round_number}: {len(problems)} dependency version(s) are unusable with Rust {self.msrv_text}")
             progressed = False
             for problem in problems:
-                if self.downgrade(problem["name"], problem["version"], problem["reason"]):
+                if self.resolve_problem(problem):
                     progressed = True
-                    continue
-                # No usable release of this crate: try to drop it from the graph
-                # by moving the crates that depend on it to an older version.
-                packages = self.locked_registry_packages()
-                for parent in parents_of(packages, problem["name"]):
-                    parent_version = next(
-                        (p["version"] for p in packages if p.get("name") == parent),
-                        None,
-                    )
-                    if not parent_version or (parent, parent_version) in self.blacklist:
-                        continue
-                    if self.downgrade(parent, parent_version, f"pulls in {problem['name']} {problem['version']}"):
-                        progressed = True
-                        break
                 else:
+                    seen_unresolved.add((problem["name"], problem["version"]))
                     unresolved.append(problem)
             if not progressed:
                 print("no further progress is possible; stopping", file=sys.stderr)
@@ -313,8 +335,9 @@ class Autopin:
         problems = self.problems()
         if not problems:
             ok, fetch_problems = self.fetch_offender()
-            if not ok:
-                problems = fetch_problems or [{"name": "(cargo fetch)", "version": "", "reason": "see the output above"}]
+            if ok:
+                return []
+            problems = fetch_problems or [{"name": "(cargo fetch)", "version": "", "reason": "see the output above"}]
         return problems + unresolved
 
 
@@ -325,6 +348,11 @@ def main() -> int:
     parser.add_argument("--resolve-toolchain", default="stable", help="toolchain used for `cargo update`")
     parser.add_argument("--msrv-toolchain", help="toolchain used for the final `cargo fetch` check")
     parser.add_argument("--rounds", type=int, default=12)
+    parser.add_argument(
+        "--list",
+        action="store_true",
+        help="only report the offenders and the version that would be selected for each of them",
+    )
     args = parser.parse_args()
 
     root = pathlib.Path(args.root).resolve()
@@ -343,6 +371,13 @@ def main() -> int:
         return ["cargo", f"+{toolchain}"] if have_rustup else ["cargo"]
 
     autopin = Autopin(root, msrv, cargo_for(args.resolve_toolchain), cargo_for(args.msrv_toolchain or msrv))
+    if args.list:
+        problems = autopin.problems()
+        for problem in problems:
+            choices = autopin.candidates(problem["name"], problem["version"])
+            print(f"{problem['name']} {problem['version']} -> {choices[0] if choices else '(no MSRV-compatible release)'}  [{problem['reason']}]")
+        print(f"{len(problems)} package(s) are too new for Rust {msrv}")
+        return 0
     remaining = autopin.fix(args.rounds)
 
     if remaining:
