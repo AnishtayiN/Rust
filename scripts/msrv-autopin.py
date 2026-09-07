@@ -271,18 +271,24 @@ class Autopin:
                 "rust_version": (999, 0, 0),
                 "hard": True,
                 "reason": f"cargo {self.msrv_text} cannot parse its manifest (edition 2024?)",
+                "parse_only": True,
             }
             for name, version in offenders.items()
         ]
         return False, problems, output
 
     # -- fixes -------------------------------------------------------------
-    def candidates(self, name: str, current: str) -> list[str]:
-        """Older releases of `name` that the MSRV toolchain can handle.
+    def candidates(self, name: str, current: str, limit: tuple[int, int, int] | None = None) -> list[str]:
+        """Older releases of `name` that the pinned cargo can still deal with.
 
-        Newest first; the newest release of every series is always included so
-        that crossing a major/minor boundary stays reachable.
+        `limit` is the newest rust-version that is still acceptable: the MSRV
+        for a normal downgrade, or 1.85 when the goal is merely to get a
+        manifest that cargo can *parse* (which is all that matters for crates
+        we never compile, e.g. the wasm subtree).  Newest first; the newest
+        release of every series is always included so that crossing a
+        major/minor boundary stays reachable.
         """
+        ceiling = limit or self.msrv
         upper = semver(current)
         top: list[str] = []
         per_series: dict[tuple[int, int], str] = {}
@@ -294,7 +300,7 @@ class Autopin:
             if parsed is None or (upper and parsed >= upper):
                 continue  # only genuine downgrades
             rust_version = entry.get("rust_version")
-            if rust_version and version_tuple(rust_version) > self.msrv:
+            if rust_version and version_tuple(rust_version) > ceiling:
                 continue
             top.append(version)
             key = series_of(version)
@@ -303,9 +309,9 @@ class Autopin:
         chosen = set(top[:20]) | set(per_series.values())
         return sorted(chosen, key=lambda text: semver(text) or (0, 0, 0, 0, ""), reverse=True)[:40]
 
-    def downgrade(self, name: str, version: str, reason: str, hints: list[str] | None = None) -> tuple[bool, str]:
+    def downgrade(self, name: str, version: str, reason: str, ceiling: tuple[int, int, int] | None = None) -> tuple[bool, str]:
         """Try to move `name` to an older release; returns (changed, cargo output)."""
-        ordered = self.candidates(name, version)
+        ordered = self.candidates(name, version, ceiling)
         if hints:  # crates cargo itself pointed at, tried first
             ordered = [hint for hint in hints if hint in ordered] + [item for item in ordered if item not in hints]
         if not ordered:
@@ -322,8 +328,9 @@ class Autopin:
             if result.returncode == 0:
                 print(f"  {name} {version} -> {candidate}  ({reason})")
                 return True, last_output
-        tail = [line for line in last_output.splitlines() if line.strip()][-1:]
-        print(f"  {name} {version}: {reason} -> every candidate was rejected{': ' + tail[0] if tail else ''}")
+        reasons = [line.strip() for line in last_output.splitlines() if "error:" in line or "required by" in line or "which satisfies" in line]
+        for line in list(dict.fromkeys(reasons))[:4]:
+            print(f"      {line}")
         return False, last_output
 
     # -- driver ------------------------------------------------------------
@@ -332,7 +339,8 @@ class Autopin:
         name, version = problem["name"], problem["version"]
         if self.current_version(name) != version:
             return True  # already resolved, usually because an ancestor moved
-        changed, output = self.downgrade(name, version, problem["reason"])
+        ceiling = None if not problem.get("parse_only") else (EDITION_2024[0], EDITION_2024[1] - 1, 99)
+        changed, output = self.downgrade(name, version, problem["reason"], ceiling)
         if changed:
             self.refresh()
             return True
@@ -348,6 +356,7 @@ class Autopin:
                     "name": ancestor,
                     "version": ancestor_version,
                     "reason": f"keeps {name} {version} in the graph",
+                    "parse_only": True,
                 },
                 depth + 1,
             ):

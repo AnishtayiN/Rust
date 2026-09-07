@@ -65,21 +65,40 @@ jobs:
           # on the first manifest this cargo cannot parse.
           { cargo fetch --locked; python3 scripts/check-msrv-lock.py; } 2>&1 | tee /tmp/verify.log
 
-      - name: Publish diagnostics as annotations
+      - name: Publish diagnostics
         if: failure()
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
+          {
+            echo "### lockfile job diagnostics (run ${{ github.run_id }})"
+            echo '```'
+            cat /tmp/step.log /tmp/verify.log 2>/dev/null | tail -c 50000
+            echo '```'
+          } > /tmp/diag.md
           python3 - <<'PYEOF'
-          import math, pathlib
-          for name in ("step.log", "verify.log"):
-              path = pathlib.Path("/tmp") / name
-              if not path.is_file():
-                  continue
-              text = path.read_text(errors="replace")
-              text = text.replace("\r", "").replace("%", "%25").replace("\n", "%0A")
-              size = 1500
-              parts = math.ceil(len(text) / size)
-              for index in range(parts):
-                  print(f"::error::{name} {index + 1}/{parts}::{text[index * size:(index + 1) * size]}")
+          import json, os, pathlib, urllib.request
+
+          body = pathlib.Path("/tmp/diag.md").read_text(errors="replace")
+          api = os.environ.get("GITHUB_API_URL", "https://api.github.com")
+          url = f"{api}/repos/{os.environ['GITHUB_REPOSITORY']}/commits/{os.environ['GITHUB_SHA']}/comments"
+          request = urllib.request.Request(
+              url,
+              data=json.dumps({"body": body}).encode(),
+              method="POST",
+              headers={
+                  "Authorization": f"Bearer {os.environ['GH_TOKEN']}",
+                  "Accept": "application/vnd.github+json",
+                  "Content-Type": "application/json",
+              },
+          )
+          try:
+              with urllib.request.urlopen(request, timeout=30) as reply:
+                  print("posted the log tail as a commit comment:", reply.status)
+          except Exception as error:  # noqa: BLE001 - diagnostics must never fail the job
+              print(f"could not post a commit comment ({error}); falling back to annotations")
+              for line in body.splitlines()[-30:]:
+                  print("::error::" + line.replace("%", "%25"))
           PYEOF
 
       - name: Report drift against what the MSRV resolver would pick today
