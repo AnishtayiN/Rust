@@ -562,10 +562,6 @@ dependencies = [
  "libc",
 ]
 
-dependencies = [
- "libm",
-]
-
 [[package]]
 name = "countme"
 version = "3.0.1"

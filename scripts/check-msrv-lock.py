@@ -261,6 +261,32 @@ def main() -> int:
                 f"whole lockfile with ./scripts/refresh-lockfile.sh"
             )
 
+    # A lockfile cargo cannot even parse fails every build with a message that
+    # does not point at the offending line (a hand-edited entry leaves, say, a
+    # second `dependencies` array behind).  Say where it is broken instead.
+    try:
+        import tomllib
+    except ImportError:  # Python < 3.11
+        tomllib = None
+    if tomllib is not None:
+        try:
+            parsed = tomllib.loads(lock_path.read_text(encoding="utf-8", errors="replace"))
+        except Exception as error:  # noqa: BLE001 - any TOML failure is the point
+            problems.append(f"Cargo.lock is not valid TOML: {str(error).splitlines()[0]}")
+        else:
+            entries = parsed.get("package", [])
+            seen: set[tuple[str, str]] = set()
+            for entry in entries:
+                key = (str(entry.get("name")), str(entry.get("version")))
+                if key in seen:
+                    problems.append(f"Cargo.lock lists {key[0]} {key[1]} twice")
+                seen.add(key)
+            if entries and len(entries) != len(packages):
+                problems.append(
+                    f"Cargo.lock has {len(entries)} packages for the TOML parser but "
+                    f"{len(packages)} for this script; the file is malformed"
+                )
+
     if lockfile_version > 3:
         problems.append(
             f"Cargo.lock uses lockfile format v{lockfile_version}, but cargo {msrv_text} "
