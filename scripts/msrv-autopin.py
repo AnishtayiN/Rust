@@ -239,6 +239,9 @@ class Autopin:
         self.pins = self.load_pins()
         self.pin_failures: list[str] = []
         self.oracle_noise = ""
+        # Downgrades the *build* forced (name, from, to): those crates lie about
+        # their MSRV, so they belong in the pin file as well.
+        self.oracle_moves: list[tuple[str, str, str]] = []
 
     # -- state -------------------------------------------------------------
     def refresh(self) -> None:
@@ -561,7 +564,13 @@ class Autopin:
                           f"{len(offenders)} crate(s) with Rust {self.msrv_text}")
                     for problem in offenders:
                         print(f"  {problem['name']} {problem['version']}: {problem['reason']}")
+                    before = {problem["name"]: self.current_version(problem["name"])
+                              for problem in offenders}
                     if any(self.move_offender(problem) for problem in offenders):
+                        for name, frm in before.items():
+                            to = self.current_version(name)
+                            if frm and to and to != frm:
+                                self.oracle_moves.append((name, frm, to))
                         continue
                     break
                 if polished:
@@ -597,6 +606,14 @@ class Autopin:
         if not ok and not fetch_problems:
             sys.stdout.write(output[-2500:])
             fetch_problems = [{"name": "(cargo fetch failed)", "version": "", "reason": "see the output above", "hard": True}]
+        if self.oracle_moves:
+            print("\npins the build oracle had to discover — a fresh resolution picks the too-new "
+                  "release again, so record them in scripts/msrv-pins.toml:")
+            for name, frm, to in sorted(set(self.oracle_moves)):
+                print(f'  {name} = "{to}"   # {frm} does not compile with Rust {self.msrv_text}')
+        if self.oracle_noise:
+            print("note: the oracle also reported errors unrelated to Rust versions, so a clean "
+                  "build is not implied by this run")
         # Only "cargo 1.75 cannot read this manifest" is fatal: a crate that
         # merely *declares* a newer rust-version is harmless as long as it is
         # never compiled (the wasm / wayland subtrees in our graph) and the
