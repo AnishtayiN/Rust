@@ -245,6 +245,7 @@ class Autopin:
                         "name": package["name"],
                         "version": package["version"],
                         "rust_version": required,
+                        "rust_version_text": entry["rust_version"],
                         "hard": required >= EDITION_2024,
                         "reason": f"requires rustc {entry['rust_version']} (MSRV is {self.msrv_text})",
                     }
@@ -269,6 +270,7 @@ class Autopin:
                 "name": name,
                 "version": version,
                 "rust_version": (999, 0, 0),
+                "rust_version_text": "unparsable",
                 "hard": True,
                 "reason": f"cargo {self.msrv_text} cannot parse its manifest (edition 2024?)",
                 "parse_only": True,
@@ -312,8 +314,6 @@ class Autopin:
     def downgrade(self, name: str, version: str, reason: str, ceiling: tuple[int, int, int] | None = None) -> tuple[bool, str]:
         """Try to move `name` to an older release; returns (changed, cargo output)."""
         ordered = self.candidates(name, version, ceiling)
-        if hints:  # crates cargo itself pointed at, tried first
-            ordered = [hint for hint in hints if hint in ordered] + [item for item in ordered if item not in hints]
         if not ordered:
             print(f"  {name} {version}: {reason} -> nothing older that is MSRV-clean")
             return False, ""
@@ -449,9 +449,9 @@ def main() -> int:
     hard, soft = autopin.fix(args.rounds)
     for problem in soft:
         print(
-            f"note: {problem['name']} {problem['version']} declares rustc "
-            f"{problem.get('rust_version')} as its minimum but no older release fits its parents' "
-            "requirements (fine as long as it is never compiled for Windows/Android)",
+            f"note: {problem['name']} {problem['version']} declares rustc {problem.get('rust_version_text')} "
+            "as its minimum but no older release fits its parents' requirements (harmless as long as it is "
+            "never compiled for Windows/Android)",
             file=sys.stderr,
         )
     if hard:
