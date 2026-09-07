@@ -102,6 +102,16 @@ jobs:
           # what matters, the warning tells you when it is worth refreshing.
           rustup toolchain install stable --profile minimal >/dev/null
           set +e
+          # Report the dependencies that no static check can vouch for: locked
+          # releases published after the pinned toolchain that declare no
+          # rust-version at all.  If one of them ever fails to compile, pin the
+          # newest release from before the toolchain date in scripts/msrv-pins.toml.
+          python3 scripts/msrv-autopin.py --list --suggest-pins >"${RUNNER_TEMP:-/tmp}/suspects.log" 2>&1
+          cat "${RUNNER_TEMP:-/tmp}/suspects.log"
+          count=$(grep -oE '^[0-9]+ locked crate' "${RUNNER_TEMP:-/tmp}/suspects.log" | grep -oE '^[0-9]+')
+          if [ "${count:-0}" -gt 0 ]; then
+            echo "::warning::${count} locked dependencies are published after Rust ${RUST_ACADEMY_MSRV} and declare no rust-version; the two build jobs are the only proof they work"
+          fi
           cargo +stable update --dry-run --config 'resolver.incompatible-rust-versions="fallback"' \
             | tee "${RUNNER_TEMP:-/tmp}/drift.log"
           status=$?

@@ -454,6 +454,63 @@ class Autopin:
             print(f"      {line}")
         return False, last_output
 
+    # -- date gate (report only) -------------------------------------------------
+
+    def msrv_released(self) -> str:
+        """The date the MSRV toolchain was released, from the root manifest."""
+        try:
+            text = (self.root / "Cargo.toml").read_text(encoding="utf-8")
+        except OSError:
+            return ""
+        table = re.search(r"(?ms)^\[package\.metadata\.msrv\]\s*$(.*?)(?=^\[|\Z)", text)
+        match = re.search(r'^released\s*=\s*"(\d{4}-\d{2}-\d{2})"', table.group(1), re.M) if table else None
+        return match.group(1) if match else ""
+
+    def unpinnable_suspects(self) -> list[dict]:
+        """Locked crates that are newer than the MSRV toolchain and silent about it.
+
+        A crate published after the pinned toolchain existed, whose index entry
+        carries no `rust_version`, may use anything up to whatever was current
+        when it was published — that is how rowan (`ptr_addr_eq`) and fontdue
+        (`cast_signed`) broke both release builds while every check was green.
+        Only a build can prove such a crate works, so this is deliberately
+        report-only: it names the suspects and the newest release that predates
+        the MSRV toolchain, which is the version to put in msrv-pins.toml.
+        """
+        released = self.msrv_released()
+        if not released:
+            print("note: no [package.metadata.msrv] released date in Cargo.toml; "
+                  "cannot date-gate the locked crates")
+            return []
+        self.refresh()
+        names = sorted({package["name"] for package in self.packages})
+        with concurrent.futures.ThreadPoolExecutor(max_workers=8) as pool:
+            list(pool.map(fetch_index, names))
+        suspects = []
+        for package in self.packages:
+            entries = _index_cache.get(package["name"], [])
+            entry = next((item for item in entries if item["vers"] == package["version"]), None)
+            if not entry or entry.get("rust_version"):
+                continue  # declares an MSRV we already checked
+            published = (entry.get("pubtime") or "")[:10]
+            if not published or published <= released:
+                continue
+            if self.pins.get(package["name"]) == package["version"]:
+                continue  # already pinned on purpose
+            older = [item for item in entries
+                     if not item.get("yanked") and (item.get("pubtime") or "")[:10] <= released
+                     and semver(item["vers"]) and semver(item["vers"]) < semver(package["version"])
+                     and (semver(item["vers"]) or ())[:2] == (semver(package["version"]) or ())[:2]]
+            suspect = {
+                "name": package["name"],
+                "version": package["version"],
+                "published": published,
+                "candidate": older[0]["vers"] if older else "",
+                "candidate_published": (older[0].get("pubtime") or "")[:10] if older else "",
+            }
+            suspects.append(suspect)
+        return sorted(suspects, key=lambda item: (item["name"], item["version"]))
+
     # -- driver ------------------------------------------------------------
     def move_offender(self, problem: dict, depth: int = 0) -> bool:
         """Move the offending crate, or one of its ancestors, to a usable version."""
@@ -562,6 +619,12 @@ def main() -> int:
     )
     parser.add_argument("--pins-file", default="", help="curated pins (default: scripts/msrv-pins.toml)")
     parser.add_argument(
+        "--suggest-pins",
+        action="store_true",
+        help="with --list: also report locked crates published after the MSRV toolchain that "
+             "declare no rust-version (the ones only a build can catch), with a candidate version",
+    )
+    parser.add_argument(
         "--list",
         action="store_true",
         help="only report which locked releases are too new and what they would move to",
@@ -597,6 +660,20 @@ def main() -> int:
             choices = autopin.candidates(problem["name"], problem["version"])
             flag = "hard " if problem["hard"] else "soft "
             print(f"{flag}{problem['name']} {problem['version']} -> {choices[0] if choices else '(none)'}  [{problem['reason']}]")
+        if args.suggest_pins:
+            suspects = autopin.unpinnable_suspects()
+            released = autopin.msrv_released()
+            print(f"\n{len(suspects)} locked crate(s) were published after Rust {msrv} "
+                  f"({released}) and declare no rust-version — only a build proves they work:")
+            for suspect in suspects[:40]:
+                hint = (f"newest release from before {released}: {suspect['candidate']} "
+                        f"({suspect['candidate_published']})") if suspect["candidate"] else "no older release in the same series"
+                print(f"  {suspect['name']} {suspect['version']} (published {suspect['published']}) -> {hint}")
+            if len(suspects) > 40:
+                print(f"  ... and {len(suspects) - 40} more")
+            if suspects:
+                print(f"To keep one from coming back, pin it: add `<crate> = \"<version>\"` to "
+                      f"{autopin.pins_file.name}")
         print(f"{len(problems)} package(s) are newer than Rust {msrv}")
         if not problems and not autopin.pins:
             print(f"nothing to pin (no {autopin.pins_file.name})")

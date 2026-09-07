@@ -944,13 +944,13 @@ dependencies = [
 
 [[package]]
 name = "fontdue"
-version = "0.9.4"
+version = "0.9.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7894823fa221401399e2598f8b63f81ac77ff5c63248b7656779bff1632d7d3d"
+checksum = "2e57e16b3fe8ff4364c0661fdaac543fb38b29ea9bc9c2f45612d90adf931d2b"
 dependencies = [
  "hashbrown 0.15.5",
  "rayon",
- "ttf-parser 0.25.1",
+ "ttf-parser 0.21.1",
 ]
 
 [[package]]

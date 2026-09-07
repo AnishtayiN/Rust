@@ -20,3 +20,14 @@
 #   error[E0658]: use of unstable library feature 'ptr_addr_eq'
 # on `rowan`, pulled in by i-slint-compiler 1.8 (`rowan = "^0.15"`).
 rowan = "0.15.15"
+
+# fontdue 0.9.4 (Jul 2026) calls `cast_signed` on integer primitives, an item
+# that does not exist in Rust 1.75, and -- like rowan -- it declares no
+# rust-version, so the MSRV-aware resolver picks it over 0.9.3 (Feb 2025,
+# whose dependency set is otherwise identical).  Without this pin both release
+# builds die with
+#   error[E0599]: no function or associated item named `cast_signed`
+#   error: could not compile `fontdue` (lib)
+# fontdue is pulled in by i-slint-core / i-slint-compiler 1.8 (`^0.9.0`) for the
+# software renderer's font handling.
+fontdue = "0.9.3"

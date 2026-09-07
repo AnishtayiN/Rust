@@ -90,7 +90,11 @@ old toolchain. Three pieces keep that arrangement healthy:
   ```
 
   When that fixes something, record the version it landed on in
-  `scripts/msrv-pins.toml` so the next refresh keeps it.
+  `scripts/msrv-pins.toml` so the next refresh keeps it.  To find candidates
+  before a build trips over them, `python3 scripts/msrv-autopin.py --list
+  --suggest-pins` reports every locked crate published after the date in
+  `[package.metadata.msrv] released` that declares no `rust-version`, together
+  with the newest release from before that date.
 
 * **`scripts/set-version.py`** writes a version into `Cargo.toml` **and**
   `Cargo.lock` — the root package's version is recorded in the lock too, and an
