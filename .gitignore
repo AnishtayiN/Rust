@@ -28,3 +28,7 @@ dist/
 
 # Vendored source cache (downloaded by scripts/prepare-vendor.sh)
 vendor/.cache/
+
+# Python bytecode (scripts/*.py)
+__pycache__/
+*.pyc
