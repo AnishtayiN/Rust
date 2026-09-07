@@ -8,7 +8,14 @@
 # them at the end of a run, and `scripts/check-msrv-lock.py` fails the build if
 # the lockfile drifted away from a pin.
 #
-# Format: `crate = "locked version"`.  Drop an entry once the upstream crate
+# Format: `crate = "locked version"`.
+
+# Editing Cargo.lock by hand for a pin means removing the dependencies that
+# only the newer release needed as well: `core_maths` left the graph with
+# fontdue 0.9.4, and a lockfile that still carries it is refused by every
+# `cargo --locked` build.  ./scripts/refresh-lockfile.sh (or
+# scripts/diagnose-lockfile.sh, which shows the difference) is what keeps the
+# graph consistent; check-msrv-lock.py warns about leftovers.  Drop an entry once the upstream crate
 # declares a correct `rust-version` (then the resolver avoids it by itself) or
 # once the project's MSRV moves past its real requirement.
 [pins]

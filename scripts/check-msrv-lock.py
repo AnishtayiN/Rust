@@ -90,18 +90,34 @@ packages_meta: dict[str, str] = {}
 
 
 def parse_lock(lock: pathlib.Path) -> list[dict[str, str]]:
+    """The [[package]] entries of Cargo.lock (plus "deps": [(name, version|"")])."""
     packages: list[dict[str, str]] = []
-    current: dict[str, str] | None = None
+    current: dict[str, object] | None = None
+    in_deps = False
     for line in lock.read_text(encoding="utf-8", errors="replace").splitlines():
+        stripped = line.strip()
+        if in_deps and current is not None:
+            if stripped == "]":
+                in_deps = False
+                continue
+            edge = re.match(r'^"([A-Za-z0-9_.+-]+)(?: ([0-9][^"]*))?",?$', stripped)
+            if edge:
+                current["deps"].append((edge.group(1), edge.group(2) or ""))  # type: ignore[index]
+            continue
         if line.strip() == "[[package]]":
             if current:
                 packages.append(current)
-            current = {}
+            current = {"deps": []}
+            in_deps = False
             continue
         if current is None:
             match = re.match(r"^version\s*=\s*\"?(\d+)\"?", line.strip())
             if match:
                 packages_meta["lockfile_version"] = match.group(1)
+            continue
+        if line.strip() == "dependencies = [":
+            in_deps = True
+            current.setdefault("deps", [])
             continue
         match = re.match(r"^(name|version|source)\s*=\s*\"(.*)\"$", line.strip())
         if match:
@@ -136,6 +152,43 @@ def read_pins(pins_path: pathlib.Path) -> dict[str, str]:
             if name and version:
                 pins[name] = version.strip('"').strip("'")
     return pins
+
+
+def graph_notes(packages: list[dict[str, str]]) -> list[str]:
+    """Notes about the dependency graph as Cargo.lock describes it.
+
+    Cargo writes (and with `--locked` demands) exactly the set of packages its
+    resolution reaches, so a package no entry depends on — which is what a
+    hand-edited downgrade tends to leave behind, e.g. `core_maths` once fontdue
+    stops asking for ttf-parser's `no-std-float` feature — makes every
+    `--locked` build fail with "the lock file needs to be updated".
+    """
+    by_name: dict[str, list[str]] = {}
+    for package in packages:
+        by_name.setdefault(package.get("name", "?"), []).append(package.get("version", "?"))
+    edges = {
+        (package.get("name", "?"), package.get("version", "?")): list(package.get("deps", []))  # type: ignore[arg-type]
+        for package in packages
+    }
+    roots = [
+        (package.get("name", "?"), package.get("version", "?"))
+        for package in packages
+        if not package.get("source")
+    ]
+    seen, queue = set(roots), list(roots)
+    while queue:
+        for name, version in edges.get(queue.pop(), []):
+            for target in ([(name, version)] if version else [(name, item) for item in by_name.get(name, [])]):
+                if target in edges and target not in seen:
+                    seen.add(target)
+                    queue.append(target)
+    notes = []
+    for name, version in sorted(set(edges) - seen):
+        notes.append(
+            f"{name} {version} is in Cargo.lock but nothing depends on it — `cargo --locked` "
+            f"will refuse this lockfile; drop the package (run ./scripts/refresh-lockfile.sh)"
+        )
+    return notes
 
 
 def registry_root() -> pathlib.Path:
@@ -262,6 +315,7 @@ def main() -> int:
         if not args.allow_unfetched:
             notes.append(f"manifest not in the cargo cache (was `cargo fetch` run?): {line}")
 
+    notes.extend(graph_notes(packages))
     for note in notes:
         print(f"note: {note}")
     for problem in problems:
