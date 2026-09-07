@@ -12,10 +12,16 @@
 # Best effort by design: it always exits 0 so that a diagnostics hiccup can
 # never mask the real error.
 #
+# The comment goes to the pull request when the run belongs to one (the token of
+# a pull_request event cannot write commit comments) and to the head commit
+# otherwise.
+#
 # Used by .github/workflows/ci.yml:
 #   - name: Publish diagnostics
 #     if: failure()
-#     env: { GH_TOKEN: ${{ github.token }} }
+#     env:
+#       GH_TOKEN: ${{ github.token }}
+#       GITHUB_PR_NUMBER: ${{ github.event.pull_request.number }}
 #     run: bash scripts/ci-diagnostics.sh
 # ---------------------------------------------------------------------------
 set -uo pipefail
@@ -85,21 +91,36 @@ if not repo or not sha or not token:
 title = "### Failing job: " + os.environ.get("GITHUB_JOB", "?")
 title += " (run " + os.environ.get("GITHUB_RUN_ID", "?") + ")\n\n"
 api = os.environ.get("GITHUB_API_URL", "https://api.github.com")
-request = urllib.request.Request(
-    api + "/repos/" + repo + "/commits/" + sha + "/comments",
-    data=json.dumps({"body": title + body}).encode(),
-    method="POST",
-    headers={
-        "Authorization": "Bearer " + token,
-        "Accept": "application/vnd.github+json",
-        "Content-Type": "application/json",
-    },
-)
-try:
+headers = {
+    "Authorization": "Bearer " + token,
+    "Accept": "application/vnd.github+json",
+    "Content-Type": "application/json",
+}
+
+
+def post(url, label):
+    request = urllib.request.Request(url, data=json.dumps({"body": title + body}).encode(),
+                                     method="POST", headers=headers)
     with urllib.request.urlopen(request, timeout=30) as reply:
-        print("ci-diagnostics: posted " + str(len(body)) + " bytes to " + repo + "@" + sha[:8])
-except Exception as error:  # noqa: BLE001 - diagnostics must never fail the job
-    print("ci-diagnostics: could not post the comment (" + repr(error) + "); printing instead")
+        print("ci-diagnostics: posted " + str(len(body)) + " bytes to " + label)
+    return True
+
+
+pr = os.environ.get("GITHUB_PR_NUMBER", "")
+# On a pull_request event the token may not comment on commits (and GITHUB_SHA is
+# often a synthetic merge ref), but commenting on the PR itself always works.
+targets = ([("issues", api + "/repos/" + repo + "/issues/" + pr + "/comments", "PR #" + pr)]
+           if pr else [])
+targets.append(("commits", api + "/repos/" + repo + "/commits/" + sha + "/comments",
+                repo + "@" + sha[:8]))
+for kind, url, label in targets:
+    try:
+        if post(url, label):
+            break
+    except Exception as error:  # noqa: BLE001 - diagnostics must never fail the job
+        print("ci-diagnostics: " + kind + " comment failed (" + repr(error) + ")")
+else:
+    print("ci-diagnostics: no comment channel worked; printing instead")
     print(body[-8000:])
 PYEOF
 

@@ -31,6 +31,9 @@ on:
 
 permissions:
   contents: read
+  # a failing job reports itself as a comment on the pull request (see
+  # scripts/ci-diagnostics.sh); nothing else writes
+  pull-requests: write
 
 
 env:
@@ -41,9 +44,12 @@ jobs:
   lockfile:
     name: Cargo.lock is MSRV-safe
     runs-on: ubuntu-latest
+    # A job-level `permissions` block replaces the workflow-level one entirely,
+    # so both keys have to be restated here.  Nothing in this workflow pushes.
     permissions:
-      contents: write  # only so that a failing run can comment its log on the
-                       # commit (scripts/ci-diagnostics.sh); nothing is pushed
+      contents: write        # only for the commit-comment fallback of
+                             # scripts/ci-diagnostics.sh
+      pull-requests: write   # so that a failing run can report on the PR
     outputs:
       # true when this run generated the lockfile the build jobs should use
       generated: ${{ steps.resolve.outputs.generated }}
@@ -87,6 +93,9 @@ jobs:
             diff -u "${RUNNER_TEMP:-/tmp}/committed.Cargo.lock" Cargo.lock | head -c 12000
           } >"${RUNNER_TEMP:-/tmp}/lockdiff.log" 2>&1 || true
           cat "${RUNNER_TEMP:-/tmp}/lockdiff.log"
+          # Mirror it into an annotation: raw job logs are not reachable from
+          # every environment, check annotations are.
+          python3 -c 'import pathlib,sys; t=pathlib.Path(sys.argv[1]).read_text(errors="replace")[:3000]; print("::warning::" + t.replace("%", "%25").replace("\r", "").replace("\n", "%0A"))' "${RUNNER_TEMP:-/tmp}/lockdiff.log"
 
       # A freshly generated lockfile has never been compiled, and a manifest
       # scan cannot catch every offender: rowan 0.15.18/0.15.19, for example,
@@ -152,6 +161,7 @@ jobs:
         if: failure()
         env:
           GH_TOKEN: ${{ github.token }}
+          GITHUB_PR_NUMBER: ${{ github.event.pull_request.number }}
         run: bash scripts/ci-diagnostics.sh
 
   windows:
@@ -182,6 +192,7 @@ jobs:
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
+          GITHUB_PR_NUMBER: ${{ github.event.pull_request.number }}
         run: bash scripts/ci-diagnostics.sh
 
   android:
@@ -241,4 +252,5 @@ jobs:
         if: failure()
         env:
           GH_TOKEN: ${{ github.token }}
+          GITHUB_PR_NUMBER: ${{ github.event.pull_request.number }}
         run: bash scripts/ci-diagnostics.sh
