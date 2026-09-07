@@ -36,6 +36,59 @@ theme) is **saved automatically** and restored on the next launch.
 The executables are 64-bit: `aarch64` **and** `x86_64` Android (all modern
 phones/tablets plus emulators) and `x86_64` Windows.
 
+## Staying on Rust 1.75: why `Cargo.lock` is committed
+
+The toolchain is pinned to **Rust 1.75.0** (the last release that still
+produces Windows 7 binaries), and that Cargo cannot even *read* the manifest of
+a crate published with edition 2024 — edition 2024 was stabilised with 1.85:
+
+```text
+error: failed to download replaced source registry `crates-io`
+Caused by:
+  failed to parse manifest at `.../icu_normalizer-2.3.0/Cargo.toml`
+  feature `edition2024` is required
+```
+
+So a single too-new transitive dependency breaks **both** platform builds before
+a line of code is compiled. The remedy is to freeze the resolved graph in a
+committed `Cargo.lock` and to build with `--locked`, never re-resolving on the
+old toolchain. Three pieces keep that arrangement healthy:
+
+* **The MSRV-aware resolver.** `rust-version = "1.75"` in `Cargo.toml` lets
+  Cargo ≥ 1.84 prefer dependency releases that still support 1.75. The policy is
+  passed per command (`resolver.incompatible-rust-versions = "fallback"`)
+  instead of living in a config file, so the old Cargo never sees a key it does
+  not know. Do **not** add `resolver = "3"` or switch `edition` to `2024`:
+  either one makes the pinned toolchain unable to build the project at all.
+* **`scripts/refresh-lockfile.sh`** regenerates `Cargo.lock` that way and then
+  repairs and audits it:
+  * `scripts/msrv-autopin.py` — the resolver only *prefers* MSRV-compatible
+    versions; when a crate has none (the wasm-only `wasip2`/`wit-bindgen`
+    subtree, `redox_syscall`, …) it pins an older release, and if the crate
+    itself cannot move it moves the crates that depend on it, letting cargo
+    verify every requirement on the way;
+  * `scripts/check-msrv-lock.py` — after `cargo fetch` unpacked the graph, this
+    fails if any locked crate uses edition 2024, an unstable `cargo-features`
+    key, or a lockfile format that Cargo 1.75 cannot read (a newer declared
+    `rust-version` is reported as a note: those crates only matter when they
+    are actually compiled for Windows/Android).
+* **`scripts/set-version.py`** writes a version into `Cargo.toml` **and**
+  `Cargo.lock` — the root package's version is recorded in the lock too, and an
+  out-of-sync lock would make every `--locked` build fail.
+
+```sh
+./scripts/refresh-lockfile.sh                      # re-resolve for Rust 1.75
+python3 scripts/check-msrv-lock.py                  # audit Cargo.lock
+cargo build --release --bin rust-academy --locked   # always --locked
+```
+
+Run the refresh whenever a dependency has to move (or when CI warns that
+`Cargo.lock` drifted); commit the new lock together with the change that needs
+it. The [`CI` workflow](.github/workflows/ci.yml) performs the same audit on
+every push/PR before building both artifacts — and with
+*"Re-resolve with the MSRV-aware resolver"* ticked it builds against a freshly
+generated lock, so a dependency refresh can be verified before it is committed.
+
 ## Getting a release
 
 Releases are produced by the **manual** GitHub Actions workflow
@@ -66,9 +119,13 @@ Releases are produced by the **manual** GitHub Actions workflow
 ### Windows
 
 ```sh
-cargo build --release --bin rust-academy
+cargo build --release --bin rust-academy --locked
 target/release/rust-academy.exe
 ```
+
+`--locked` reuses the committed `Cargo.lock`; without it cargo would
+re-resolve every dependency to its newest release, which no longer works with
+the pinned 1.75 toolchain (see *Staying on Rust 1.75*).
 
 Rust 1.75 (pinned in `rust-toolchain.toml`) is used so the binary still runs
 on Windows 7. The build embeds the Rust Academy icon and version resources.
@@ -92,6 +149,8 @@ bash scripts/prepare-vendor.sh
 # Build (signed with keystore/rust-academy-release.p12)
 cargo apk build --release --lib
 # -> target/release/apk/rust-academy.apk
+# (cargo apk cannot forward --locked, so check the lock first:
+#  cargo metadata --locked --format-version 1 > /dev/null)
 ```
 
 `cargo apk run --release --lib` installs it on a connected device/emulator.
@@ -121,6 +180,7 @@ newer releases have a higher MSRV and dropped API 24 support even earlier).
 
 ```
 Cargo.toml                 Cargo manifest + Android packaging metadata (cargo apk)
+Cargo.lock                 Frozen dependency graph (builds use --locked; see below)
 build.rs                   Slint compiler + Windows icon/version resources
 rust-toolchain.toml        Rust 1.75.0 + Android/Windows targets
 src/
@@ -136,7 +196,11 @@ assets/
 res/                      Android launcher icons (mipmaps)
 vendor/slint-android-backend  Patched Slint Android backend (API 24 support)
 scripts/prepare-vendor.sh  Regenerate/verify the vendored backend
+scripts/refresh-lockfile.sh Regenerate Cargo.lock for the pinned MSRV toolchain
+scripts/msrv-autopin.py    Pin back dependencies the MSRV resolver falls back on
+scripts/check-msrv-lock.py Audit Cargo.lock against Rust 1.75
 keystore/                  Android release signing key (+ README)
+.github/workflows/ci.yml         MSRV lockfile audit + both platform builds (no publishing)
 .github/workflows/release.yml  Manual release workflow (asks for version, 2 artifacts)
 ```
 
