@@ -2,24 +2,26 @@
 # ---------------------------------------------------------------------------
 # ci-diagnostics.sh — post the collected CI log tails to the head commit.
 #
-# Debugging a workflow run is normally a matter of opening the job log, but
-# neither the Actions log nor the artifact store is reachable from every
-# environment (sandboxes, restricted networks, no browser).  The REST API for
-# commit comments, however, is: so each job tees the interesting command output
-# to a file and calls this script on failure, which turns the tail of those
-# files into one comment on the commit under test.
+# Debugging a workflow run normally means opening the job log, but neither the
+# Actions log nor the artifact store is reachable from every environment
+# (sandboxes, restricted networks, no browser).  The REST API for commit
+# comments is, so jobs tee the interesting command output into
+# "$RUNNER_TEMP"/{step,verify,build}.log and call this script on failure, which
+# turns those files into a single comment on the commit under test.
 #
-# Best effort by design: it always exits 0, so it can never mask the real error
-# with a diagnostics problem.
+# Best effort by design: it always exits 0 so that a diagnostics hiccup can
+# never mask the real error.
 #
-# Used by .github/workflows/ci.yml; run from any step with
-#   - run: bash scripts/ci-diagnostics.sh
+# Used by .github/workflows/ci.yml:
+#   - name: Publish diagnostics
 #     if: failure()
+#     env: { GH_TOKEN: ${{ github.token }} }
+#     run: bash scripts/ci-diagnostics.sh
 # ---------------------------------------------------------------------------
 set -uo pipefail
 
-# $RUNNER_TEMP is a Windows path on Windows runners, so use it instead of
-# /tmp: the helper below hands the file to a native python.exe.
+# $RUNNER_TEMP is a Windows path on Windows runners, which is what we want:
+# the helper below hands the file to a native python.exe.
 WORK_DIR="${RUNNER_TEMP:-/tmp}"
 OUT="${DIAG_FILE:-$WORK_DIR/diag.md}"
 LIMIT="${DIAG_BYTES:-45000}"
@@ -41,36 +43,48 @@ if [ ! -s "$OUT" ]; then
     exit 0
 fi
 
-PY="$(command -v python3 || command -v python)"
-if [ -z "$PY" ]; then
-    echo "ci-diagnostics: no python interpreter found; dumping the log instead" >&2
-    cat "$OUT" | tail -c 4000
+if command -v python3 >/dev/null 2>&1; then
+    PY=python3
+elif command -v python >/dev/null 2>&1; then
+    PY=python
+else
+    echo "ci-diagnostics: no python interpreter; printing the log instead" >&2
+    tail -c 4000 "$OUT"
     exit 0
 fi
 
-"$PY" - "$OUT" <<'PYEOF'
+# shellcheck disable=SC2086
+"$PY" - "$OUT" <<'PYEOF' || echo "ci-diagnostics: the helper failed; ignoring"
 import json, os, pathlib, sys, urllib.request
 
 body = pathlib.Path(sys.argv[1]).read_text(errors="replace")
-header = f"### Failing job diagnostics ({os.environ.get('GITHUB_JOB', '?'}), run {os.environ.get('GITHUB_RUN_ID', '?')})\n\n"
-api = os.environ.get("GITHUB_API_URL", "https://api.github.com")
-repo = os.environ["GITHUB_REPOSITORY"]
-sha = os.environ["GITHUB_SHA"]
+repo = os.environ.get("GITHUB_REPOSITORY", "")
+sha = os.environ.get("GITHUB_SHA", "")
 token = os.environ.get("GH_TOKEN") or os.environ.get("GITHUB_TOKEN", "")
+if not repo or not sha or not token:
+    print("ci-diagnostics: GITHUB_REPOSITORY/GITHUB_SHA/token missing; printing the log instead")
+    print(body[-8000:])
+    raise SystemExit(0)
+
+title = "### Failing job: " + os.environ.get("GITHUB_JOB", "?")
+title += " (run " + os.environ.get("GITHUB_RUN_ID", "?") + ")\n\n"
+api = os.environ.get("GITHUB_API_URL", "https://api.github.com")
 request = urllib.request.Request(
-    f"{api}/repos/{repo}/commits/{sha}/comments",
-    data=json.dumps({"body": header + body}).encode(),
+    api + "/repos/" + repo + "/commits/" + sha + "/comments",
+    data=json.dumps({"body": title + body}).encode(),
     method="POST",
     headers={
-        "Authorization": f"Bearer {token}",
+        "Authorization": "Bearer " + token,
         "Accept": "application/vnd.github+json",
         "Content-Type": "application/json",
     },
 )
 try:
     with urllib.request.urlopen(request, timeout=30) as reply:
-        print(f"ci-diagnostics: posted {len(body)} bytes to {repo}@{sha[:8]} (status {reply.status})")
+        print("ci-diagnostics: posted " + str(len(body)) + " bytes to " + repo + "@" + sha[:8])
 except Exception as error:  # noqa: BLE001 - diagnostics must never fail the job
-    print(f"ci-diagnostics: could not post the comment ({error}); echoing instead")
+    print("ci-diagnostics: could not post the comment (" + repr(error) + "); printing instead")
     print(body[-8000:])
 PYEOF
+
+exit 0
