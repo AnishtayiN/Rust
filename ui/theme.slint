@@ -1,0 +1,27 @@
+// Rust Academy - design tokens (light & dark)
+//
+// The Rust side fills this global whenever the user switches the theme, so
+// every component stays in sync automatically.
+
+export global Theme {
+    in-out property <color> bg: #0b0f1c;
+    in-out property <brush> bg-grad: @linear-gradient(180deg, #0b0f1c 0%, #0e1527 60%, #0d1322 100%);
+    in-out property <color> panel: #151d31;
+    in-out property <color> panel2: #1b2540;
+    in-out property <color> stroke: #26314f;
+    in-out property <color> text: #e9eefc;
+    in-out property <color> text-soft: #a7b2d2;
+    in-out property <color> text-faint: #6d7896;
+    in-out property <color> accent: #ff8a1e;
+    in-out property <color> accent-soft: #ff8a1e29;
+    in-out property <color> accent-text: #241300;
+    in-out property <brush> accent-grad: @linear-gradient(90deg, #ff8a1e 0%, #ffb347 100%);
+    in-out property <color> ok: #38d39f;
+    in-out property <color> ok-soft: #38d39f24;
+    in-out property <color> bad: #ff6b81;
+    in-out property <color> bad-soft: #ff6b8124;
+    in-out property <color> gold: #ffd166;
+    in-out property <color> gold-soft: #ffd16624;
+    in-out property <color> info: #7aa2ff;
+    in-out property <color> info-soft: #7aa2ff24;
+}
