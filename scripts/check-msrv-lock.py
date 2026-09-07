@@ -111,6 +111,33 @@ def parse_lock(lock: pathlib.Path) -> list[dict[str, str]]:
     return packages
 
 
+def read_pins(pins_path: pathlib.Path) -> dict[str, str]:
+    """Read `scripts/msrv-pins.toml` (crate -> the version that must stay locked).
+
+    Those pins exist for dependencies that need a newer compiler than this
+    project's MSRV while declaring no usable `rust-version`, so nothing else
+    here can notice them drifting back up; this is the check that does.
+    """
+    pins: dict[str, str] = {}
+    section = ""
+    try:
+        text = pins_path.read_text(encoding="utf-8")
+    except OSError:
+        return pins
+    for line in text.splitlines():
+        stripped = line.split("#", 1)[0].strip()
+        if not stripped:
+            continue
+        if stripped.startswith("[") and stripped.endswith("]"):
+            section = stripped[1:-1].strip()
+            continue
+        if section == "pins" and "=" in stripped:
+            name, _, version = (part.strip() for part in stripped.partition("="))
+            if name and version:
+                pins[name] = version.strip('"').strip("'")
+    return pins
+
+
 def registry_root() -> pathlib.Path:
     home = os.environ.get("CARGO_HOME")
     base = pathlib.Path(home) if home else pathlib.Path.home() / ".cargo"
@@ -125,6 +152,7 @@ def registry_root() -> pathlib.Path:
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--lock", default="Cargo.lock")
+    parser.add_argument("--pins", default="", help="curated pin file (default: scripts/msrv-pins.toml)")
     parser.add_argument("--msrv", help="override the MSRV (default: rust-version from Cargo.toml)")
     parser.add_argument(
         "--allow-unfetched",
@@ -159,6 +187,26 @@ def main() -> int:
     notes: list[str] = []
     missing: list[str] = []
     checked = 0
+
+    pins_path = pathlib.Path(args.pins) if args.pins else pathlib.Path("scripts/msrv-pins.toml")
+    if not pins_path.is_file() and (lock_path.parent / pins_path).is_file():
+        pins_path = lock_path.parent / pins_path
+    pins = read_pins(pins_path)
+    if pins:
+        locked: dict[str, set[str]] = {}
+        for package in packages:
+            locked.setdefault(package.get("name", "?"), set()).add(package.get("version", "?"))
+        for name, want in sorted(pins.items()):
+            have = locked.get(name, set())
+            if want in have:
+                print(f"pinned: {name} = {want}")
+                continue
+            problems.append(
+                f"{name} is locked at {'/'.join(sorted(have)) or 'nothing'}, but {pins_path} pins it to "
+                f"{want}: that newer version needs a compiler past Rust {msrv_text} even though it says "
+                f"otherwise. Fix it with `cargo +stable update -p {name} --precise {want}`, or refresh the "
+                f"whole lockfile with ./scripts/refresh-lockfile.sh"
+            )
 
     if lockfile_version > 3:
         problems.append(

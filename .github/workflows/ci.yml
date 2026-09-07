@@ -27,12 +27,11 @@ on:
         default: false
   pull_request:
   push:
-    branches: [main, "arena/**"]
+    branches: [main]
 
 permissions:
-  # Only needed so that a failing job can attach its log tail to the commit
-  # (scripts/ci-diagnostics.sh); nothing here pushes.
-  contents: write
+  contents: read
+
 
 env:
   # Must match the channel in rust-toolchain.toml.
@@ -42,6 +41,9 @@ jobs:
   lockfile:
     name: Cargo.lock is MSRV-safe
     runs-on: ubuntu-latest
+    permissions:
+      contents: write  # only so that a failing run can comment its log on the
+                       # commit (scripts/ci-diagnostics.sh); nothing is pushed
     outputs:
       # true when this run generated the lockfile the build jobs should use
       generated: ${{ steps.resolve.outputs.generated }}
@@ -69,6 +71,30 @@ jobs:
           # fails on the first manifest this cargo cannot parse, and --locked
           # proves the lock is in sync with Cargo.toml.
           { cargo fetch --locked; python3 scripts/check-msrv-lock.py; } 2>&1 | tee "${RUNNER_TEMP:-/tmp}/verify.log"
+
+      # A freshly generated lockfile has never been compiled, and a manifest
+      # scan cannot catch every offender: rowan 0.15.18/0.15.19, for example,
+      # need `ptr_addr_eq` (stable since Rust 1.76) while declaring no
+      # rust-version at all, so cargo 1.75 happily resolves them and only the
+      # build notices.  Use a real build as the oracle: msrv-autopin.py
+      # downgrades whatever fails to compile, re-applies scripts/msrv-pins.toml
+      # and leaves anything unrelated to dependency versions alone.  Android-only
+      # dependencies (the vendored jni / android-activity stack) are left to the
+      # `android` job below, whose real build is the judge there.
+      - name: Re-pin against the compiler (refresh runs only)
+        if: ${{ steps.resolve.outputs.generated == 'true' }}
+        continue-on-error: true
+        run: |
+          set -o pipefail
+          rustup target add --toolchain "$RUST_ACADEMY_MSRV" x86_64-pc-windows-msvc
+          python3 scripts/msrv-autopin.py --msrv "$RUST_ACADEMY_MSRV" \
+            --resolve-toolchain stable --msrv-toolchain "$RUST_ACADEMY_MSRV" \
+            --oracle "cargo +$RUST_ACADEMY_MSRV check --locked --workspace --target x86_64-pc-windows-msvc" \
+            2>&1 | tee "${RUNNER_TEMP:-/tmp}/oracle.log"
+          # The oracle may have moved packages; re-run the two real checks so
+          # that the uploaded lockfile is the verified one.
+          cargo fetch --locked
+          python3 scripts/check-msrv-lock.py
 
       - name: Note when newer MSRV-compatible releases exist
         run: |

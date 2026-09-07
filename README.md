@@ -72,6 +72,26 @@ old toolchain. Three pieces keep that arrangement healthy:
     key, or a lockfile format that Cargo 1.75 cannot read (a newer declared
     `rust-version` is reported as a note: those crates only matter when they
     are actually compiled for Windows/Android).
+* **`scripts/msrv-pins.toml`** covers the crates that need a newer compiler
+  than they admit. `rowan` 0.15.18/0.15.19, for instance, use `ptr_addr_eq`
+  (stable since Rust 1.76) but declare no `rust-version`, so neither the MSRV-aware
+  resolver, nor a manifest scan, nor `cargo +1.75.0 fetch` can see it coming —
+  only the build does, with `error[E0658]: use of unstable library feature
+  'ptr_addr_eq'`. Those crates are pinned by hand in that file; `msrv-autopin.py`
+  re-applies the pins on every refresh and `check-msrv-lock.py` fails when the
+  lockfile drifts away from one.
+* **`--oracle` (or `MSRV_BUILD_ORACLE=...`)** hands `msrv-autopin.py` a real build
+  command as the source of truth, so a compile error becomes a downgrade instead
+  of a red release build:
+
+  ```sh
+  MSRV_BUILD_ORACLE='cargo +1.75.0 check --locked --workspace --target x86_64-pc-windows-msvc' \
+    ./scripts/refresh-lockfile.sh
+  ```
+
+  When that fixes something, record the version it landed on in
+  `scripts/msrv-pins.toml` so the next refresh keeps it.
+
 * **`scripts/set-version.py`** writes a version into `Cargo.toml` **and**
   `Cargo.lock` — the root package's version is recorded in the lock too, and an
   out-of-sync lock would make every `--locked` build fail.
@@ -86,8 +106,10 @@ Run the refresh whenever a dependency has to move (or when CI warns that
 `Cargo.lock` drifted); commit the new lock together with the change that needs
 it. The [`CI` workflow](.github/workflows/ci.yml) performs the same audit on
 every push/PR before building both artifacts — and with
-*"Re-resolve with the MSRV-aware resolver"* ticked it builds against a freshly
-generated lock, so a dependency refresh can be verified before it is committed.
+*"Re-resolve with the MSRV-aware resolver"* ticked it also re-pins the generated
+lock against a real `cargo check` for the Windows target, so a dependency
+refresh can be verified (and repaired) before it is committed.  Android-only
+dependencies are judged by the Android build job itself.
 
 ## Getting a release
 

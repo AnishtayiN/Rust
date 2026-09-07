@@ -1,0 +1,22 @@
+# Transitive dependencies that must stay pinned to a version older than the
+# newest release, because they do not declare a `rust-version` even though
+# their code needs a newer compiler than this project's MSRV (Rust 1.75, kept
+# for Windows 7 support -- see README.md).
+#
+# `scripts/msrv-autopin.py` re-applies every pin here after each MSRV-aware
+# resolution, so refreshing the lockfile cannot undo them.  It also re-checks
+# them at the end of a run, and `scripts/check-msrv-lock.py` fails the build if
+# the lockfile drifted away from a pin.
+#
+# Format: `crate = "locked version"`.  Drop an entry once the upstream crate
+# declares a correct `rust-version` (then the resolver avoids it by itself) or
+# once the project's MSRV moves past its real requirement.
+[pins]
+
+# rowan 0.15.16..0.15.17 declare rust-version = 1.77 (so the resolver skips
+# them), but 0.15.18 and 0.15.19 dropped that declaration again while still
+# using `ptr_addr_eq`, stable only since Rust 1.76.  Without this pin a fresh
+# resolution picks 0.15.19 and both release builds die with
+#   error[E0658]: use of unstable library feature 'ptr_addr_eq'
+# on `rowan`, pulled in by i-slint-compiler 1.8 (`rowan = "^0.15"`).
+rowan = "0.15.15"

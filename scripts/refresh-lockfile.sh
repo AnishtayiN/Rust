@@ -25,9 +25,19 @@
 #   scripts/refresh-lockfile.sh              # refresh the existing lock
 #   scripts/refresh-lockfile.sh --full       # resolve everything from scratch
 #
+# Curated pins in scripts/msrv-pins.toml are re-applied by the autopin step, so
+# a refresh can never undo a downgrade that a dependency forces us to keep.
+#
 # Environment overrides
 #   RESOLVE_TOOLCHAIN  toolchain used for the resolution step (default: stable)
 #   MSRV_TOOLCHAIN     toolchain used to validate the result   (default: from rust-toolchain.toml)
+#   MSRV_BUILD_ORACLE  optional build command used as the source of truth about
+#                      what compiles, e.g.
+#                        MSRV_BUILD_ORACLE='cargo +1.75.0 check --locked --workspace --target x86_64-pc-windows-msvc' \
+#                          ./scripts/refresh-lockfile.sh
+#                      Dependencies that fail to *build* with the pinned
+#                      toolchain (while declaring no usable rust-version) are
+#                      then downgraded automatically, one build at a time.
 # ---------------------------------------------------------------------------
 set -euo pipefail
 
@@ -95,7 +105,12 @@ fi
 # back the odd crate that is too new (e.g. the wasm-only wit-bindgen subtree).
 # Pin those back one by one until the pinned toolchain accepts the graph.
 echo "==> pinning dependencies that are still too new for Rust ${MSRV_TOOLCHAIN}"
-$PY scripts/msrv-autopin.py --resolve-toolchain "${RESOLVE_TOOLCHAIN}" --msrv-toolchain "${MSRV_TOOLCHAIN}"
+ORACLE_ARGS=()
+if [[ -n "${MSRV_BUILD_ORACLE:-}" ]]; then
+    ORACLE_ARGS=(--oracle "${MSRV_BUILD_ORACLE}")
+fi
+$PY scripts/msrv-autopin.py --resolve-toolchain "${RESOLVE_TOOLCHAIN}" \
+    --msrv-toolchain "${MSRV_TOOLCHAIN}" "${ORACLE_ARGS[@]+"${ORACLE_ARGS[@]}"}"
 
 echo "==> checking the result against cargo ${MSRV_TOOLCHAIN}"
 if [[ "${have_rustup}" == 1 ]]; then

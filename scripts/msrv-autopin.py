@@ -25,6 +25,14 @@ offending requirement usually disappears with them); the ancestor to move is
 taken from cargo's own "required by package ..." trace, falling back to the
 dependency lists in Cargo.lock.
 
+Two extensions cover what neither cargo nor the index can see:
+
+  * `scripts/msrv-pins.toml` keeps hand-picked crates pinned across every
+    refresh (for dependencies that need a newer compiler than they declare).
+  * `--oracle "<build command>"` runs a real build and reads *its* errors, so
+    `error[E0658]: use of unstable library feature ...` also becomes a
+    downgrade instead of a red CI run.
+
 Used by scripts/refresh-lockfile.sh; can also be run by hand:
 
     python3 scripts/msrv-autopin.py [--resolve-toolchain stable] [--rounds 12]
@@ -39,6 +47,7 @@ import json
 import os
 import pathlib
 import re
+import shlex
 import subprocess
 import sys
 import urllib.error
@@ -59,8 +68,8 @@ EDITION_2024 = (1, 85)
 def run(argv: list[str], cwd: str | None = None) -> subprocess.CompletedProcess:
     try:
         return subprocess.run(argv, text=True, capture_output=True, cwd=cwd)
-    except FileNotFoundError as error:  # e.g. no rustup/cargo on PATH
-        return subprocess.CompletedProcess(argv, 127, "", str(error))
+    except OSError as error:  # e.g. no rustup/cargo on PATH, or not executable
+        return subprocess.CompletedProcess(argv, 127, "", f"cannot run {' '.join(argv)}: {error}")
 
 
 def semver(text: str) -> tuple[int, int, int, int, str] | None:
@@ -199,7 +208,18 @@ def ancestors_from_cargo_error(text: str) -> list[str]:
 
 
 class Autopin:
-    def __init__(self, root: pathlib.Path, msrv: str, cargo_resolve: list[str], cargo_msrv: list[str]) -> None:
+    # Compiler/cargo errors that only appear once a crate is built and that a
+    # version downgrade can fix.  Anything else the oracle reports is noise for
+    # us (a missing C toolchain, a broken source file, ...).
+    ORACLE_ERRORS = (
+        re.compile(r"error: could not compile `(?P<name>[A-Za-z0-9_.+-]+)`"),
+        re.compile(r"error\[E0658\].*?feature '(?P<feature>[^']+)'"),
+        re.compile(r"package `(?P<name>[A-Za-z0-9_.+-]+) v(?P<version>[^ `\s]+)` cannot be built because it "
+                   r"requires rustc (?P<msrv>\d+\.\d+(?:\.\d+)?)"),
+    )
+
+    def __init__(self, root: pathlib.Path, msrv: str, cargo_resolve: list[str], cargo_msrv: list[str],
+                 oracle: str = "", pins_file: pathlib.Path | None = None) -> None:
         self.root = root
         self.lock = root / "Cargo.lock"
         self.manifest = root / "Cargo.toml"
@@ -214,6 +234,11 @@ class Autopin:
         # brand new crate that the old toolchain cannot read.
         self.policy = ["--config", 'resolver.incompatible-rust-versions="fallback"']
         self.packages: list[dict] = []
+        self.oracle = shlex.split(oracle) if oracle else []
+        self.pins_file = pins_file or root / "scripts" / "msrv-pins.toml"
+        self.pins = self.load_pins()
+        self.pin_failures: list[str] = []
+        self.oracle_noise = ""
 
     # -- state -------------------------------------------------------------
     def refresh(self) -> None:
@@ -280,6 +305,100 @@ class Autopin:
             for name, version in offenders.items()
         ]
         return False, problems, output
+
+    # -- curated pins ------------------------------------------------------
+    def load_pins(self) -> dict[str, str]:
+        """Read `scripts/msrv-pins.toml` (crate -> version that must be locked).
+
+        Some crates need a newer compiler than the project MSRV while declaring
+        no `rust-version` at all, which makes them invisible to the MSRV-aware
+        resolver, to `cargo +msrv fetch` (their manifest parses fine) and to the
+        index scan.  They are pinned here once, and every run puts the pin back
+        so that a refresh cannot undo it.
+        """
+        pins: dict[str, str] = {}
+        section = ""
+        try:
+            text = self.pins_file.read_text(encoding="utf-8")
+        except OSError:
+            return pins
+        for line in text.splitlines():
+            stripped = line.split("#", 1)[0].strip()
+            if not stripped:
+                continue
+            if stripped.startswith("[") and stripped.endswith("]"):
+                section = stripped[1:-1].strip()
+                continue
+            if section == "pins" and "=" in stripped:
+                name, _, version = (part.strip() for part in stripped.partition("="))
+                if name and version:
+                    pins[name] = version.strip('"').strip("'")
+        return pins
+
+    def apply_pins(self) -> list[str]:
+        """Force the curated versions into the lockfile; return what failed."""
+        failures: list[str] = []
+        for name, want in sorted(self.pins.items()):
+            self.refresh()
+            if want in self.versions_of(name):
+                continue
+            print(f"pin {name}: {'/'.join(self.versions_of(name)) or 'missing'} -> {want}"
+                  f"  ({self.pins_file.name})")
+            have = self.versions_of(name)
+            spec = f"{name}@{have[0]}" if len(have) == 1 else name
+            result = run(self.cargo_resolve + ["update", "--manifest-path", str(self.manifest),
+                                               *self.policy, "-p", spec, "--precise", want])
+            if result.returncode != 0:
+                output = (result.stdout or "") + (result.stderr or "")
+                details = [line.strip() for line in output.splitlines() if "error:" in line][:2]
+                failures.append(f"{name}@{want} could not be applied: "
+                                + ("; ".join(details) or "the requirements of its dependants reject it"))
+        self.pin_failures = failures
+        return failures
+
+    # -- the build oracle --------------------------------------------------
+    def oracle_problems(self) -> list[dict]:
+        """Offenders reported by the `--oracle` build command, if it is set."""
+        if not self.oracle:
+            return []
+        result = run(self.oracle, cwd=str(self.root))
+        output = (result.stdout or "") + (result.stderr or "")
+        if result.returncode == 0:
+            self.oracle_noise = ""
+            return []
+        names = sorted({package["name"] for package in self.packages}, key=len, reverse=True)
+        problems: list[dict] = []
+        seen: set[tuple[str, str]] = set()
+        for line in output.splitlines():
+            match = next((m for m in (pattern.search(line) for pattern in self.ORACLE_ERRORS) if m), None)
+            if not match:
+                continue
+            found = match.groupdict()
+            name = found.get("name") or ""
+            if name not in names:
+                name = next((known for known in names if known in line), "")
+            if not name or (name, found.get("version", "")) in seen:
+                continue
+            seen.add((name, found.get("version", "")))
+            locked = self.versions_of(name)
+            version = found.get("version") or (
+                max(locked, key=lambda text: semver(text) or (0, 0, 0, 0, "")) if locked else "")
+            if found.get("feature"):
+                reason = f"uses the unstable feature `{found['feature']}` (Rust {self.msrv_text} does not have it)"
+            elif found.get("msrv"):
+                reason = f"requires rustc {found['msrv']} (MSRV is {self.msrv_text})"
+            else:
+                reason = f"does not build with Rust {self.msrv_text}"
+            problems.append({"name": name, "version": version, "reason": reason,
+                             "rust_version": (999, 0, 0), "rust_version_text": "undeclared", "hard": True})
+        if not problems:
+            lines = [line.strip() for line in output.splitlines() if "error" in line.lower()]
+            self.oracle_noise = "\n".join(lines or output.splitlines()[-8:])[:1500]
+            print(f"warning: the oracle command ({' '.join(self.oracle)}) failed without a "
+                  f"version-related error; not touching the lockfile")
+        else:
+            self.oracle_noise = ""
+        return problems
 
     # -- fixes -------------------------------------------------------------
     def candidates(self, name: str, current: str, limit: tuple[int, int, int] | None = None) -> list[str]:
@@ -373,12 +492,27 @@ class Autopin:
 
     def fix(self, rounds: int) -> tuple[list[dict], list[dict]]:
         """Returns (hard problems left, soft problems left)."""
+        polished = False
         for round_number in range(1, rounds + 1):
             self.refresh()
+            self.apply_pins()
             ok, fetch_problems, _ = self.fetch_offender()
             if ok:
-                # Everything parses now; still try to move the remaining
-                # middle-band crates out of the graph (best effort).
+                offenders = self.oracle_problems()
+                if offenders:
+                    print(f"round {round_number}: the build oracle cannot compile "
+                          f"{len(offenders)} crate(s) with Rust {self.msrv_text}")
+                    for problem in offenders:
+                        print(f"  {problem['name']} {problem['version']}: {problem['reason']}")
+                    if any(self.move_offender(problem) for problem in offenders):
+                        continue
+                    break
+                if polished:
+                    return [], self.index_problems()
+                # Everything parses and (if configured) builds; still try to
+                # move the remaining middle-band crates out of the graph
+                # (best effort).
+                polished = True
                 leftovers = sorted(self.index_problems(), key=lambda problem: (not problem["hard"], problem["name"]))
                 moved = False
                 for problem in leftovers:
@@ -400,6 +534,8 @@ class Autopin:
                 break
             self.refresh()
         ok, fetch_problems, output = self.fetch_offender()
+        if ok:
+            fetch_problems = self.oracle_problems()  # final verdict from the real build
         index_problems = self.index_problems()
         if not ok and not fetch_problems:
             sys.stdout.write(output[-2500:])
@@ -418,6 +554,13 @@ def main() -> int:
     parser.add_argument("--resolve-toolchain", default="stable", help="toolchain used for `cargo update`")
     parser.add_argument("--msrv-toolchain", help="toolchain used to verify (default: the MSRV)")
     parser.add_argument("--rounds", type=int, default=25)
+    parser.add_argument(
+        "--oracle",
+        default="",
+        help='build command to use as the source of truth about what compiles, e.g. '
+             '"cargo +1.75.0 check --locked --target x86_64-pc-windows-msvc -p rust-academy"',
+    )
+    parser.add_argument("--pins-file", default="", help="curated pins (default: scripts/msrv-pins.toml)")
     parser.add_argument(
         "--list",
         action="store_true",
@@ -440,18 +583,28 @@ def main() -> int:
     def cargo_for(toolchain: str) -> list[str]:
         return ["cargo", f"+{toolchain}"] if have_rustup else ["cargo"]
 
-    autopin = Autopin(root, msrv, cargo_for(args.resolve_toolchain), cargo_for(args.msrv_toolchain or msrv))
+    autopin = Autopin(root, msrv, cargo_for(args.resolve_toolchain), cargo_for(args.msrv_toolchain or msrv),
+                      oracle=args.oracle,
+                      pins_file=pathlib.Path(args.pins_file) if args.pins_file else None)
 
     if args.list:
+        autopin.refresh()
+        for name, want in sorted(autopin.pins.items()):
+            state = "ok" if want in autopin.versions_of(name) else "NOT LOCKED (locked: %s)" % ("/".join(autopin.versions_of(name)) or "absent")
+            print(f"pin {name} = {want}: {state}")
         problems = autopin.index_problems()
         for problem in problems:
             choices = autopin.candidates(problem["name"], problem["version"])
             flag = "hard " if problem["hard"] else "soft "
             print(f"{flag}{problem['name']} {problem['version']} -> {choices[0] if choices else '(none)'}  [{problem['reason']}]")
         print(f"{len(problems)} package(s) are newer than Rust {msrv}")
+        if not problems and not autopin.pins:
+            print(f"nothing to pin (no {autopin.pins_file.name})")
         return 0
 
     hard, soft = autopin.fix(args.rounds)
+    for failure in autopin.pin_failures:
+        print(f"warning: curated pin: {failure}", file=sys.stderr)
     for problem in soft:
         print(
             f"note: {problem['name']} {problem['version']} declares rustc {problem.get('rust_version_text')} "
