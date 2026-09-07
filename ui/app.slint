@@ -1,0 +1,1771 @@
+// Rust Academy — main application UI
+// All content is pushed from Rust; every interaction goes back through callbacks.
+
+import {
+    AchCard, AppButton, CheatRow, CodeLine, CodeView, DayBar, ExplorerCode,
+    IconBox, LessonInfo, LessonRow, ModuleInfo, NavButton, Pill, ProgressBar,
+    QuizOption, QuizQ, SearchBox, SectionHead, StatCard, TopBar, Block,
+    Achievement, CheatEntry, VarEntry,
+} from "components.slint";
+
+// ============================================================================
+// Home
+// ============================================================================
+
+component HeroCard inherits Rectangle {
+    in property <string> kicker;
+    in property <string> title;
+    in property <string> body;
+    in property <string> chip1;
+    in property <string> chip2;
+    in property <string> chip3;
+    in property <string> chip4;
+    in property <string> cta;
+    in property <string> cta2;
+    in property <bool> cta-visible: true;
+    callback cta-clicked;
+    callback cta2-clicked;
+
+    in-out property <bool> show-art: self.width > 780px;
+
+    height: 236px;
+    border-radius: 22px;
+    border-width: 1px;
+    border-color: #ff8a1e29;
+    background: @linear-gradient(135deg, #ff8a1e26 0%, #ff8a1e08 55%, #ffffff08 100%);
+
+    vertical := VerticalLayout {
+        padding: 28px;
+        spacing: 8px;
+        width: root.show-art ? parent.width - 300px : parent.width;
+
+        Text {
+            text: root.kicker;
+            color: #ffab4d;
+            font-size: 12px;
+            font-weight: 800;
+        }
+        Text {
+            text: root.title;
+            color: #ffffff;
+            font-size: 32px;
+            font-weight: 900;
+        }
+        Text {
+            text: root.body;
+            color: #c6cfe8;
+            font-size: 13.5px;
+            wrap: word-wrap;
+            width: 100%;
+        }
+
+        Rectangle { height: 6px; }
+
+        HorizontalLayout {
+            spacing: 8px;
+            alignment: start;
+            Pill { text: root.chip1; icon-name: "spark"; kind: 3; }
+            Pill { text: root.chip2; icon-name: "bolt"; kind: 4; }
+            Pill { text: root.chip3; icon-name: "layers"; kind: 5; }
+            Pill { text: root.chip4; icon-name: "rocket"; kind: 1; }
+        }
+
+        Rectangle { height: 4px; }
+
+        HorizontalLayout {
+            spacing: 10px;
+            alignment: start;
+            AppButton {
+                text: root.cta;
+                icon-name: "fwd";
+                kind: 0;
+                width: 230px;
+                visible: root.cta-visible;
+                clicked => { root.cta-clicked(); }
+            }
+            AppButton {
+                text: root.cta2;
+                icon-name: "book";
+                kind: 1;
+                width: 180px;
+                clicked => { root.cta2-clicked(); }
+            }
+        }
+    }
+
+    Rectangle {
+        width: 200px;
+        height: 200px;
+        x: parent.width - 250px;
+        y: 18px;
+        border-radius: 48px;
+        background: @linear-gradient(135deg, #ff7a18 0%, #ffb347 100%);
+        opacity: 0.96;
+        visible: root.show-art;
+
+        Rectangle {
+            width: 132px;
+            height: 132px;
+            x: (parent.width - self.width) / 2;
+            y: (parent.height - self.height) / 2;
+            border-radius: 34px;
+            background: #ffffff2b;
+
+            Image {
+                width: 96px;
+                height: 96px;
+                x: (parent.width - self.width) / 2;
+                y: (parent.height - self.height) / 2;
+                source: @image-url("../assets/logo.svg");
+                image-fit: contain;
+            }
+        }
+    }
+}
+
+component HomeView inherits Rectangle {
+    in property <[LessonInfo]> continue-lessons;
+    in property <[DayBar]> week;
+    in property <int> xp;
+    in property <int> streak;
+    in property <int> done;
+    in property <int> total;
+    in property <string> best-text;
+    in property <string> greeting;
+    callback open-lesson(int);
+    callback go-lessons();
+    callback go-explorer();
+
+    VerticalLayout {
+        spacing: 18px;
+
+        HeroCard {
+            kicker: "YOUR RUST JOURNEY";
+            title: "Rust Academy";
+            body: root.greeting;
+            chip1: root.total + " lessons";
+            chip2: "Earn XP";
+            chip3: "Code Lab";
+            chip4: "Quizzes";
+            cta: "Continue learning";
+            cta2: "Open Code Lab";
+            cta-visible: root.continue-lessons.length > 0;
+            cta-clicked => { root.go-lessons(); }
+            cta2-clicked => { root.go-explorer(); }
+        }
+
+        HorizontalLayout {
+            spacing: 12px;
+            StatCard { icon-name: "bolt"; value: "" + root.xp; label: "Total XP"; width: (parent.width - 36px) / 4; }
+            StatCard { icon-name: "star"; value: "" + root.streak; label: "Day streak"; width: (parent.width - 36px) / 4; }
+            StatCard { icon-name: "check"; value: "" + root.done + " / " + root.total; label: "Lessons done"; width: (parent.width - 36px) / 4; }
+            StatCard { icon-name: "trophy"; value: root.best-text; label: "Best quiz score"; width: (parent.width - 36px) / 4; }
+        }
+
+        SectionHead {
+            icon-name: "rocket";
+            title: "Continue learning";
+            subtitle: "Pick up where you left off";
+        }
+
+        for l in root.continue-lessons : LessonRow {
+            id: l.id;
+            icon-name: l.icon;
+            title: l.title;
+            subtitle: l.subtitle;
+            meta: l.duration + " min · " + l.xp + " XP";
+            best: l.best;
+            status: l.status;
+            progress: l.progress;
+            clicked => { root.open-lesson(l.id); }
+        }
+
+        Rectangle { height: 10px; }
+
+        SectionHead {
+            icon-name: "chart";
+            title: "Weekly activity";
+            subtitle: "XP earned in the last 7 days";
+        }
+
+        Rectangle {
+            height: 168px;
+            border-radius: 18px;
+            border-width: 1px;
+            border-color: #26314f;
+            background: #151d31;
+
+            HorizontalLayout {
+                padding: 20px;
+                spacing: 12px;
+                alignment: center;
+
+                for d in root.week : Rectangle {
+                    width: 44px;
+                    height: 120px;
+
+                    Rectangle {
+                        width: 30px;
+                        height: 96px;
+                        x: 7px;
+                        y: 0px;
+                        border-radius: 9px;
+                        background: #26314f;
+
+                        Rectangle {
+                            width: 30px;
+                            height: Math.max(6px, 96px * d.value);
+                            x: 0px;
+                            y: 96px - Math.max(6px, 96px * d.value);
+                            border-radius: 9px;
+                            background: @linear-gradient(180deg, #ffb347 0%, #ff7a18 100%);
+                        }
+                    }
+
+                    Text {
+                        x: 0px;
+                        y: 104px;
+                        width: 44px;
+                        text: d.label;
+                        color: #6d7896;
+                        font-size: 10px;
+                        horizontal-alignment: center;
+                    }
+                }
+            }
+        }
+    }
+}
+
+// ============================================================================
+// Lessons
+// ============================================================================
+
+component LessonsView inherits Rectangle {
+    in property <[ModuleInfo]> modules;
+    in property <[LessonInfo]> lessons;
+    in property <string> search;
+    in property <int> done;
+    in property <int> total;
+    callback open-lesson(int);
+    callback search-changed(string);
+
+    VerticalLayout {
+        spacing: 16px;
+
+        TopBar {
+            title: "Course Library";
+            show-back: false;
+            xp: "" + root.done;
+            streak: "" + root.total;
+        }
+
+        SearchBox {
+            query: root.search;
+            changed(text) => { root.search-changed(text); }
+        }
+
+        for m in root.modules : VerticalLayout {
+            spacing: 10px;
+
+            SectionHead {
+                icon-name: m.icon;
+                kicker: m.title;
+                title: m.desc;
+                subtitle: "";
+            }
+
+            ProgressBar {
+                value: m.done / (m.total * 1.0);
+            }
+
+            for l in root.lessons : LessonRow {
+                id: l.id;
+                icon-name: l.icon;
+                title: l.title;
+                subtitle: l.subtitle;
+                meta: l.duration + " min · " + l.xp + " XP";
+                best: l.best;
+                status: l.status;
+                progress: l.progress;
+                visible: l.module == m.id;
+                clicked => { root.open-lesson(l.id); }
+            }
+
+            Rectangle { height: 8px; }
+        }
+    }
+}
+
+// ============================================================================
+// Lesson
+// ============================================================================
+
+component LessonView inherits Rectangle {
+    in property <string> icon-name;
+    in property <string> module-title;
+    in property <string> title;
+    in property <string> subtitle;
+    in property <string> duration;
+    in property <string> xp;
+    in property <int> status;
+    in property <string> best;
+    in property <[Block]> blocks;
+    in property <[CodeLine]> code-lines;
+    callback back();
+    callback mark-complete();
+    callback start-quiz();
+
+    VerticalLayout {
+        spacing: 16px;
+
+        TopBar {
+            title: root.module-title;
+            back-clicked => { root.back(); }
+        }
+
+        Rectangle {
+            border-radius: 18px;
+            border-width: 1px;
+            border-color: #26314f;
+            background: #151d31;
+
+            VerticalLayout {
+                padding: 24px;
+                spacing: 12px;
+
+                HorizontalLayout {
+                    spacing: 14px;
+                    alignment: start;
+
+                    Rectangle {
+                        width: 56px;
+                        height: 56px;
+                        border-radius: 16px;
+                        background: #ff8a1e29;
+
+                        IconBox {
+                            width: 28px;
+                            height: 28px;
+                            x: (parent.width - self.width) / 2;
+                            y: (parent.height - self.height) / 2;
+                            name: root.icon-name;
+                            tint: #ffab4d;
+                        }
+                    }
+
+                    VerticalLayout {
+                        spacing: 4px;
+                        vertical-stretch: 1;
+
+                        Text {
+                            text: root.title;
+                            color: #ffffff;
+                            font-size: 20px;
+                            font-weight: 800;
+                            wrap: word-wrap;
+                            width: 100%;
+                        }
+
+                        Text {
+                            text: root.subtitle;
+                            color: #a7b2d2;
+                            font-size: 12.5px;
+                            wrap: word-wrap;
+                            width: 100%;
+                        }
+                    }
+                }
+
+                HorizontalLayout {
+                    spacing: 8px;
+                    alignment: start;
+                    Pill { text: root.duration + " min"; icon-name: "clock"; kind: 0; }
+                    Pill { text: root.xp + " XP"; icon-name: "bolt"; kind: 3; }
+                    if root.status == 2 : Pill { text: "Completed"; icon-name: "check"; kind: 1; }
+                    if root.best != "" : Pill { text: "Best " + root.best; icon-name: "target"; kind: 5; }
+                }
+            }
+        }
+
+        // ---------- lesson content ----------
+        for b in root.blocks : VerticalLayout {
+            spacing: 0px;
+            width: 100%;
+
+            if b.kind == 0 : Text {
+                text: b.title;
+                color: #ffffff;
+                font-size: 19px;
+                font-weight: 800;
+                wrap: word-wrap;
+                width: 100%;
+            } if b.kind == 1 : Text {
+                text: b.text;
+                color: #a7b2d2;
+                font-size: 13px;
+                wrap: word-wrap;
+                width: 100%;
+            } if b.kind == 2 : CodeView {
+                filename: b.file;
+                lang: "Rust";
+                lines: root.code-lines;
+                block: b.id;
+            } if b.kind == 3 : Rectangle {
+                border-radius: 14px;
+                border-width: 1px;
+                border-color: #ff8a1e;
+                background: #ff8a1e29;
+
+                VerticalLayout {
+                    padding: 16px;
+                    spacing: 6px;
+                    HorizontalLayout {
+                        spacing: 8px;
+                        IconBox { width: 16px; height: 16px; name: "bulb"; tint: #ffb347; }
+                        Text {
+                            text: b.title;
+                            color: #ffb347;
+                            font-size: 12.5px;
+                            font-weight: 800;
+                        }
+                    }
+                    Text {
+                        text: b.text;
+                        color: #c6cfe8;
+                        font-size: 12.5px;
+                        wrap: word-wrap;
+                        width: 100%;
+                    }
+                }
+            } if b.kind == 4 : Rectangle {
+                border-radius: 14px;
+                border-width: 1px;
+                border-color: #ff6b81;
+                background: #ff6b8124;
+
+                VerticalLayout {
+                    padding: 16px;
+                    spacing: 6px;
+                    HorizontalLayout {
+                        spacing: 8px;
+                        IconBox { width: 16px; height: 16px; name: "warn"; tint: #ff8d9a; }
+                        Text {
+                            text: b.title;
+                            color: #ff8d9a;
+                            font-size: 12.5px;
+                            font-weight: 800;
+                        }
+                    }
+                    Text {
+                        text: b.text;
+                        color: #d9d3e8;
+                        font-size: 12.5px;
+                        wrap: word-wrap;
+                        width: 100%;
+                    }
+                }
+            }
+        }
+
+        HorizontalLayout {
+            spacing: 10px;
+            alignment: start;
+
+            AppButton {
+                text: root.status == 2 ? "Completed" : "Mark as complete";
+                icon-name: root.status == 2 ? "check" : "flag";
+                kind: 2;
+                width: 210px;
+                clicked => { root.mark-complete(); }
+            }
+
+            AppButton {
+                text: root.best == "" ? "Start quiz" : "Retake quiz";
+                icon-name: "target";
+                kind: 0;
+                width: 170px;
+                clicked => { root.start-quiz(); }
+            }
+        }
+    }
+}
+
+// ============================================================================
+// Quiz
+// ============================================================================
+
+component QuizView inherits Rectangle {
+    in property <int> index;
+    in property <int> count;
+    in property <[QuizQ]> quiz;
+    in property <int> correct;
+    in property <int> score;
+    in property <bool> done;
+    in property <int> phase; // 0 answering, 1 feedback
+    in property <string> progress-text;
+    in property <string> result-text;
+    in property <string> result-sub;
+    callback back();
+    callback pick(int);
+    callback next();
+    callback retry();
+
+    VerticalLayout {
+        spacing: 16px;
+
+        TopBar {
+            title: root.done ? "Quiz results" : "Lesson quiz";
+            back-clicked => { root.back(); }
+        }
+
+        if !root.done : VerticalLayout {
+            spacing: 14px;
+
+            ProgressBar {
+                value: (root.index + 1) * 1.0 / Math.max(1, root.count);
+            }
+
+            Text {
+                text: root.progress-text;
+                color: #ffab4d;
+                font-size: 12px;
+                font-weight: 800;
+            }
+
+            Rectangle {
+                border-radius: 18px;
+                border-width: 1px;
+                border-color: #26314f;
+                background: #151d31;
+
+                VerticalLayout {
+                    padding: 24px;
+                    spacing: 12px;
+
+                    Text {
+                        text: "Which of the following is correct?";
+                        color: #6d7896;
+                        font-size: 11.5px;
+                    }
+
+                    Text {
+                        text: root.quiz[root.index].q;
+                        color: #ffffff;
+                        font-size: 16.5px;
+                        font-weight: 700;
+                        wrap: word-wrap;
+                        width: 100%;
+                    }
+                }
+            }
+
+            VerticalLayout {
+                spacing: 10px;
+
+                QuizOption {
+                    letter: "A";
+                    label: root.quiz[root.index].a;
+                    state: root.quiz[root.index].state0;
+                    clicked => { root.pick(0); }
+                }
+                QuizOption {
+                    letter: "B";
+                    label: root.quiz[root.index].b;
+                    state: root.quiz[root.index].state1;
+                    clicked => { root.pick(1); }
+                }
+                QuizOption {
+                    letter: "C";
+                    label: root.quiz[root.index].c;
+                    state: root.quiz[root.index].state2;
+                    clicked => { root.pick(2); }
+                }
+                QuizOption {
+                    letter: "D";
+                    label: root.quiz[root.index].d;
+                    state: root.quiz[root.index].state3;
+                    clicked => { root.pick(3); }
+                }
+            }
+
+            if root.phase == 1 : Rectangle {
+                border-radius: 14px;
+                border-width: 1px;
+                border-color: root.quiz[root.index].was-correct ? #38d39f : #ff6b81;
+                background: root.quiz[root.index].was-correct ? #38d39f24 : #ff6b8124;
+
+                VerticalLayout {
+                    padding: 16px;
+                    spacing: 6px;
+
+                    Text {
+                        text: root.quiz[root.index].was-correct ? "Correct!" : "Not quite";
+                        color: root.quiz[root.index].was-correct ? #38d39f : #ff8d9a;
+                        font-size: 13.5px;
+                        font-weight: 800;
+                    }
+
+                    Text {
+                        text: root.quiz[root.index].why;
+                        color: #a7b2d2;
+                        font-size: 12.5px;
+                        wrap: word-wrap;
+                        width: 100%;
+                    }
+                }
+            }
+
+            if root.phase == 1 : HorizontalLayout {
+                spacing: 10px;
+                alignment: end;
+                AppButton {
+                    text: root.index + 1 >= root.count ? "See results" : "Next question";
+                    icon-name: "fwd";
+                    kind: 0;
+                    width: 200px;
+                    clicked => { root.next(); }
+                }
+            }
+        }
+
+        if root.done : VerticalLayout {
+            alignment: center;
+            spacing: 14px;
+
+            Rectangle {
+                height: 210px;
+                border-radius: 20px;
+                border-width: 1px;
+                border-color: #ffd166;
+                background: #ffd16624;
+
+                VerticalLayout {
+                    padding: 24px;
+                    alignment: center;
+                    spacing: 8px;
+
+                    IconBox {
+                        width: 52px;
+                        height: 52px;
+                        name: root.score >= 80 ? "trophy" : root.score >= 50 ? "star" : "target";
+                        tint: root.score >= 80 ? #ffd166 : root.score >= 50 ? #ffb347 : #a7b2d2;
+                    }
+
+                    Text {
+                        text: root.result-text;
+                        color: #ffffff;
+                        font-size: 24px;
+                        font-weight: 900;
+                    }
+
+                    Text {
+                        text: root.result-sub;
+                        color: #a7b2d2;
+                        font-size: 13px;
+                        horizontal-alignment: center;
+                        wrap: word-wrap;
+                        width: 100%;
+                    }
+                }
+            }
+
+            HorizontalLayout {
+                spacing: 10px;
+                alignment: center;
+
+                AppButton {
+                    text: "Try again";
+                    icon-name: "refresh";
+                    kind: 1;
+                    width: 150px;
+                    clicked => { root.retry(); }
+                }
+
+                AppButton {
+                    text: "Back to lesson";
+                    icon-name: "back";
+                    kind: 0;
+                    width: 180px;
+                    clicked => { root.back(); }
+                }
+            }
+        }
+    }
+}
+
+// ============================================================================
+// Explorer (animated Code Lab)
+// ============================================================================
+
+component ExplorerView inherits Rectangle {
+    in property <[string]> scenario-names;
+    in property <int> scenario;
+    in property <string> scenario-title;
+    in property <string> scenario-blurb;
+    in property <[CodeLine]> code-lines;
+    in property <int> current-line;
+    in property <[VarEntry]> vars;
+    in property <string> step-note;
+    in property <bool> playing;
+    callback back();
+    callback select-scenario(int);
+    callback step-prev();
+    callback step-next();
+    callback step-play();
+
+    VerticalLayout {
+        spacing: 14px;
+
+        TopBar {
+            title: "Code Lab";
+            back-clicked => { root.back(); }
+        }
+
+        Rectangle {
+            height: 46px;
+            border-radius: 13px;
+            border-width: 1px;
+            border-color: #26314f;
+            background: #151d31;
+
+            HorizontalLayout {
+                padding: 5px;
+                spacing: 6px;
+                alignment: start;
+
+                for name[index] in root.scenario-names : Rectangle {
+                    height: 34px;
+                    border-radius: 9px;
+                    background: index == root.scenario ? #ff8a1e29 : #00000000;
+                    width: (parent.width - 30px) / Math.max(1, root.scenario-names.length);
+
+                    Text {
+                        x: 6px;
+                        y: (parent.height - self.height) / 2;
+                        width: parent.width - 12px;
+                        text: name;
+                        color: index == root.scenario ? #ffb347 : #a7b2d2;
+                        font-size: 11.5px;
+                        font-weight: index == root.scenario ? 700 : 500;
+                        overflow: elide;
+                        horizontal-alignment: center;
+                    }
+
+                    tab-touch := TouchArea {
+                        mouse-cursor: pointer;
+                        height: 100%;
+                        width: 100%;
+                        clicked => { root.select-scenario(index); }
+                    }
+                }
+            }
+        }
+
+            Rectangle {
+                height: 100px;
+                border-radius: 14px;
+                border-width: 1px;
+                border-color: #26314f;
+                background: #151d31;
+
+            VerticalLayout {
+                padding: 16px;
+                spacing: 6px;
+
+                Text {
+                    text: root.scenario-title;
+                    color: #ffffff;
+                    font-size: 15px;
+                    font-weight: 800;
+                }
+
+                Text {
+                    text: root.scenario-blurb;
+                    color: #a7b2d2;
+                    font-size: 12px;
+                    wrap: word-wrap;
+                    width: 100%;
+                }
+            }
+        }
+
+        ExplorerCode {
+            lines: root.code-lines;
+            current: root.current-line;
+        }
+
+        Rectangle {
+            border-radius: 14px;
+            border-width: 1px;
+            border-color: #26314f;
+            background: #151d31;
+
+            VerticalLayout {
+                padding: 16px;
+                spacing: 10px;
+
+                HorizontalLayout {
+                    spacing: 8px;
+                    alignment: start;
+
+                    IconBox { width: 16px; height: 16px; name: "brain"; tint: #7aa2ff; }
+                    Text {
+                        text: "Step " + (root.current-line + 1) + " of " + root.code-lines.length;
+                        color: #ffffff;
+                        font-size: 13px;
+                        font-weight: 800;
+                    }
+                    Rectangle { vertical-stretch: 1; }
+                    if root.playing : Pill { text: "Playing"; icon-name: "play"; kind: 3; }
+                }
+
+                Rectangle {
+                    height: 1px;
+                    background: #26314f;
+                }
+
+                Text {
+                    text: root.step-note;
+                    color: #a7b2d2;
+                    font-size: 12.5px;
+                    wrap: word-wrap;
+                    width: 100%;
+                }
+
+                HorizontalLayout {
+                    spacing: 8px;
+
+                    for v in root.vars : Rectangle {
+                        height: 40px;
+                        border-radius: 10px;
+                        background: v.dirty ? #ff8a1e29 : #1b2540;
+                        width: (parent.width - 8px * root.vars.length) / Math.max(1, root.vars.length);
+
+                        Text {
+                            x: 10px;
+                            y: (parent.height - self.height) / 2;
+                            text: v.name;
+                            color: #7aa2ff;
+                            font-size: 12px;
+                            font-weight: 700;
+                            width: parent.width / 2 - 14px;
+                            overflow: elide;
+                        }
+
+                        Text {
+                            x: parent.width / 2;
+                            y: (parent.height - self.height) / 2;
+                            text: v.value;
+                            color: v.dirty ? #ffb347 : #a7b2d2;
+                            font-size: 12px;
+                            font-family: "Consolas";
+                            width: parent.width / 2 - 14px;
+                            overflow: elide;
+                        }
+                    }
+                }
+            }
+        }
+
+        HorizontalLayout {
+            spacing: 8px;
+            alignment: center;
+
+            AppButton {
+                text: "Prev";
+                icon-name: "back";
+                kind: 1;
+                width: 110px;
+                clicked => { root.step-prev(); }
+            }
+
+            AppButton {
+                text: root.playing ? "Pause" : "Play";
+                icon-name: root.playing ? "pause" : "play";
+                kind: 0;
+                width: 130px;
+                clicked => { root.step-play(); }
+            }
+
+            AppButton {
+                text: "Next";
+                icon-name: "fwd";
+                kind: 1;
+                width: 110px;
+                clicked => { root.step-next(); }
+            }
+        }
+    }
+}
+
+// ============================================================================
+// Cheat sheet / achievements / settings / about
+// ============================================================================
+
+component CheatsheetView inherits Rectangle {
+    in property <[CheatEntry]> entries;
+    in property <string> search;
+    in property <[string]> cats;
+    callback back();
+    callback search-changed(string);
+    callback toggle(int);
+
+    VerticalLayout {
+        spacing: 16px;
+
+        TopBar {
+            title: "Cheat Sheet";
+            back-clicked => { root.back(); }
+        }
+
+        SearchBox {
+            query: root.search;
+            changed(t) => { root.search-changed(t); }
+        }
+
+        HorizontalLayout {
+            spacing: 6px;
+            alignment: start;
+            for c in root.cats : Pill { text: c; kind: 5; }
+        }
+
+        for e in root.entries : CheatRow {
+            icon-name: e.icon;
+            title: e.title;
+            body: e.body;
+            open: e.open;
+            toggled => { root.toggle(e.id); }
+        }
+    }
+}
+
+component AchView inherits Rectangle {
+    in property <[Achievement]> items;
+    in property <string> header;
+    callback back();
+
+    VerticalLayout {
+        spacing: 16px;
+
+        TopBar {
+            title: "Achievements";
+            back-clicked => { root.back(); }
+        }
+
+        Rectangle {
+            border-radius: 16px;
+            border-width: 1px;
+            border-color: #ffd166;
+            background: #ffd16624;
+
+            VerticalLayout {
+                padding: 18px;
+                spacing: 6px;
+
+                Text {
+                    text: root.header;
+                    color: #ffd166;
+                    font-size: 17px;
+                    font-weight: 900;
+                }
+
+                Text {
+                    text: "Complete lessons, ace quizzes and keep your streak alive to earn every badge.";
+                    color: #a7b2d2;
+                    font-size: 12px;
+                    wrap: word-wrap;
+                    width: 100%;
+                }
+            }
+        }
+
+        for a in root.items : AchCard {
+            icon-name: a.icon;
+            title: a.title;
+            desc: a.desc;
+            got: a.earned;
+        }
+    }
+}
+
+component SettingsView inherits Rectangle {
+    in property <int> accent-index;
+    in property <[string]> accent-names;
+    in property <bool> reset-armed;
+    callback back();
+    callback select-accent(int);
+    callback reset();
+    callback open-about();
+
+    VerticalLayout {
+        spacing: 16px;
+
+        TopBar {
+            title: "Settings";
+            back-clicked => { root.back(); }
+        }
+
+        Rectangle {
+            border-radius: 16px;
+            border-width: 1px;
+            border-color: #26314f;
+            background: #151d31;
+
+            VerticalLayout {
+                padding: 20px;
+                spacing: 10px;
+
+                Text {
+                    text: "Accent color";
+                    color: #ffffff;
+                    font-size: 15px;
+                    font-weight: 800;
+                }
+
+                Text {
+                    text: "Pick the vibe — everything below keeps the same dark theme.";
+                    color: #6d7896;
+                    font-size: 11.5px;
+                    wrap: word-wrap;
+                    width: 100%;
+                }
+
+                Rectangle {
+                    height: 44px;
+                    border-radius: 12px;
+                    background: #1b2540;
+
+                    HorizontalLayout {
+                        padding: 4px;
+                        spacing: 4px;
+
+                        for name[index] in root.accent-names : Rectangle {
+                            border-radius: 9px;
+                            background: index == root.accent-index ? #ff8a1e29 : #00000000;
+                            width: (parent.width - 12px) / Math.max(1, root.accent-names.length);
+
+                            Text {
+                                text: name;
+                                color: index == root.accent-index ? #ffb347 : #a7b2d2;
+                                font-size: 12.5px;
+                                font-weight: 600;
+                                horizontal-alignment: center;
+                                vertical-alignment: center;
+                            }
+
+                            ac-touch := TouchArea {
+                                mouse-cursor: pointer;
+                                width: 100%;
+                                height: 100%;
+                                clicked => { root.select-accent(index); }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        Rectangle {
+            border-radius: 16px;
+            border-width: 1px;
+            border-color: #26314f;
+            background: #151d31;
+
+            VerticalLayout {
+                padding: 20px;
+                spacing: 10px;
+
+                Text {
+                    text: "Progress";
+                    color: #ffffff;
+                    font-size: 15px;
+                    font-weight: 800;
+                }
+
+                Text {
+                    text: "Your XP, completed lessons and badges live only on this device.";
+                    color: #6d7896;
+                    font-size: 11.5px;
+                    wrap: word-wrap;
+                    width: 100%;
+                }
+
+                AppButton {
+                    text: root.reset-armed ? "Tap again to erase everything" : "Reset all progress";
+                    icon-name: "warn";
+                    kind: 2;
+                    width: 280px;
+                    clicked => { root.reset(); }
+                }
+            }
+        }
+
+        Rectangle {
+            border-radius: 16px;
+            border-width: 1px;
+            border-color: #26314f;
+            background: #151d31;
+
+            VerticalLayout {
+                padding: 20px;
+                spacing: 10px;
+
+                Text {
+                    text: "About";
+                    color: #ffffff;
+                    font-size: 15px;
+                    font-weight: 800;
+                }
+
+                Text {
+                    text: "Version, licensing and credits.";
+                    color: #6d7896;
+                    font-size: 11.5px;
+                }
+
+                AppButton {
+                    text: "About Rust Academy";
+                    icon-name: "info";
+                    kind: 1;
+                    width: 230px;
+                    clicked => { root.open-about(); }
+                }
+            }
+        }
+    }
+}
+
+component AboutView inherits Rectangle {
+    in property <string> version;
+    callback back();
+
+    VerticalLayout {
+        spacing: 16px;
+
+        TopBar {
+            title: "About";
+            back-clicked => { root.back(); }
+        }
+
+        Rectangle {
+            border-radius: 20px;
+            border-width: 1px;
+            border-color: #ff8a1e29;
+            background: @linear-gradient(160deg, #ff8a1e1f 0%, #ff8a1e05 100%);
+
+            VerticalLayout {
+                padding: 28px;
+                alignment: center;
+                spacing: 10px;
+
+                Image {
+                    width: 92px;
+                    height: 92px;
+                    source: @image-url("../assets/logo.svg");
+                    image-fit: contain;
+                }
+
+                Text {
+                    text: "Rust Academy";
+                    color: #ffffff;
+                    font-size: 22px;
+                    font-weight: 900;
+                }
+
+                Text {
+                    text: "Version " + root.version;
+                    color: #6d7896;
+                    font-size: 12px;
+                }
+
+                Text {
+                    text: "An offline-first, modern Rust course for Android and Windows. Learn with lessons, quizzes, a visual Code Lab and a full cheat sheet — built in Rust with the Slint UI toolkit.";
+                    color: #a7b2d2;
+                    font-size: 12.5px;
+                    wrap: word-wrap;
+                    width: 100%;
+                    horizontal-alignment: center;
+                }
+
+                HorizontalLayout {
+                    spacing: 8px;
+                    alignment: center;
+                    Pill { text: "Android 7+"; icon-name: "cell"; kind: 5; }
+                    Pill { text: "Windows 7+"; icon-name: "win"; kind: 5; }
+                    Pill { text: "Rust 2021"; icon-name: "code"; kind: 3; }
+                    Pill { text: "Slint UI"; icon-name: "spark"; kind: 1; }
+                }
+            }
+        }
+
+        Text {
+            text: "Made with lots of coffee, music and — of course — Rust. MIT licensed.";
+            color: #6d7896;
+            font-size: 11.5px;
+            horizontal-alignment: center;
+        }
+    }
+}
+
+// ============================================================================
+// Shared view host (pages: 0 Home, 1 Lessons, 2 Lesson, 3 Quiz,
+//                       4 Explorer, 5 Cheat, 6 Ach, 7 Settings, 8 About)
+// ============================================================================
+
+component Pages inherits Rectangle {
+    in-out property <int> page: 0;
+    in-out property <int> xp: 0;
+    in-out property <int> streak: 0;
+    in-out property <int> lessons-done: 0;
+    in-out property <int> lessons-total: 0;
+    in-out property <int> quiz-best: 0;
+    in-out property <string> greeting;
+    in-out property <string> search;
+    in-out property <int> accent-index: 0;
+    in-out property <bool> reset-armed: false;
+    in-out property <string> version;
+    in-out property <[LessonInfo]> lessons;
+    in-out property <[ModuleInfo]> modules;
+    in-out property <[LessonInfo]> home-lessons;
+    in-out property <[DayBar]> week;
+    in-out property <[Block]> blocks;
+    in-out property <[CodeLine]> code-lines;
+    in-out property <[QuizQ]> quiz;
+    in-out property <[CheatEntry]> cheatsheet;
+    in-out property <[Achievement]> achievements;
+    in-out property <[VarEntry]> vars;
+    in-out property <[string]> scenario-names;
+    in-out property <[string]> cheat-cats;
+
+    in-out property <string> lesson-icon;
+    in-out property <string> lesson-module;
+    in-out property <string> lesson-title;
+    in-out property <string> lesson-subtitle;
+    in-out property <string> lesson-duration;
+    in-out property <string> lesson-xp;
+    in-out property <int> lesson-status;
+    in-out property <string> lesson-best;
+
+    in-out property <int> quiz-index;
+    in-out property <int> quiz-count;
+    in-out property <int> quiz-correct;
+    in-out property <int> quiz-score;
+    in-out property <bool> quiz-done;
+    in-out property <int> quiz-phase;
+    in-out property <string> quiz-progress;
+    in-out property <string> quiz-result;
+    in-out property <string> quiz-result-sub;
+
+    in-out property <int> scenario;
+    in-out property <string> scenario-title;
+    in-out property <string> scenario-blurb;
+    in-out property <int> current-line;
+    in-out property <string> step-note;
+    in-out property <bool> playing;
+
+    in-out property <string> ach-header;
+
+    callback navigate(int);
+    callback open-lesson(int);
+    callback back();
+    callback mark-complete();
+    callback start-quiz();
+    callback quiz-pick(int);
+    callback quiz-next();
+    callback quiz-retry();
+    callback select-scenario(int);
+    callback step-prev();
+    callback step-next();
+    callback step-play();
+    callback search-changed(string);
+    callback toggle-cheat(int);
+    callback select-accent(int);
+    callback reset();
+    callback open-about();
+
+    Flickable {
+        width: 100%;
+        height: 100%;
+        viewport-width: self.width;
+        viewport-height: content.height;
+
+        content := VerticalLayout {
+            width: self.width;
+            padding: 26px;
+            spacing: 16px;
+
+            if root.page == 0 : HomeView {
+                continue-lessons: root.home-lessons;
+                week: root.week;
+                xp: root.xp;
+                streak: root.streak;
+                done: root.lessons-done;
+                total: root.lessons-total;
+                best-text: root.quiz-best == 0 ? "—" : "" + root.quiz-best + "%";
+                greeting: root.greeting;
+                open-lesson(id) => { root.open-lesson(id); }
+                go-lessons() => { root.navigate(1); }
+                go-explorer() => { root.navigate(4); }
+            } if root.page == 1 : LessonsView {
+                modules: root.modules;
+                lessons: root.lessons;
+                search: root.search;
+                done: root.lessons-done;
+                total: root.lessons-total;
+                open-lesson(id) => { root.open-lesson(id); }
+                search-changed(t) => { root.search-changed(t); }
+            } if root.page == 2 : LessonView {
+                icon-name: root.lesson-icon;
+                module-title: root.lesson-module;
+                title: root.lesson-title;
+                subtitle: root.lesson-subtitle;
+                duration: root.lesson-duration;
+                xp: root.lesson-xp;
+                status: root.lesson-status;
+                best: root.lesson-best;
+                blocks: root.blocks;
+                code-lines: root.code-lines;
+                back() => { root.back(); }
+                mark-complete() => { root.mark-complete(); }
+                start-quiz() => { root.start-quiz(); }
+            } if root.page == 3 : QuizView {
+                index: root.quiz-index;
+                count: root.quiz-count;
+                quiz: root.quiz;
+                correct: root.quiz-correct;
+                score: root.quiz-score;
+                done: root.quiz-done;
+                phase: root.quiz-phase;
+                progress-text: root.quiz-progress;
+                result-text: root.quiz-result;
+                result-sub: root.quiz-result-sub;
+                back() => { root.back(); }
+                pick(o) => { root.quiz-pick(o); }
+                next() => { root.quiz-next(); }
+                retry() => { root.quiz-retry(); }
+            } if root.page == 4 : ExplorerView {
+                scenario-names: root.scenario-names;
+                scenario: root.scenario;
+                scenario-title: root.scenario-title;
+                scenario-blurb: root.scenario-blurb;
+                code-lines: root.code-lines;
+                current-line: root.current-line;
+                vars: root.vars;
+                step-note: root.step-note;
+                playing: root.playing;
+                back() => { root.back(); }
+                select-scenario(i) => { root.select-scenario(i); }
+                step-prev() => { root.step-prev(); }
+                step-next() => { root.step-next(); }
+                step-play() => { root.step-play(); }
+            } if root.page == 5 : CheatsheetView {
+                entries: root.cheatsheet;
+                search: root.search;
+                cats: root.cheat-cats;
+                back() => { root.back(); }
+                search-changed(t) => { root.search-changed(t); }
+                toggle(id) => { root.toggle-cheat(id); }
+            } if root.page == 6 : AchView {
+                items: root.achievements;
+                header: root.ach-header;
+                back() => { root.back(); }
+            } if root.page == 7 : SettingsView {
+                accent-index: root.accent-index;
+                accent-names: ["Amber", "Cyan", "Violet", "Mint"];
+                reset-armed: root.reset-armed;
+                back() => { root.back(); }
+                select-accent(i) => { root.select-accent(i); }
+                reset() => { root.reset(); }
+                open-about() => { root.open-about(); }
+            } if root.page == 8 : AboutView {
+                version: root.version;
+                back() => { root.back(); }
+            }
+        }
+    }
+}
+
+// ============================================================================
+// Sidebar & bottom navigation
+// ============================================================================
+
+component Sidebar inherits Rectangle {
+    in-out property <int> page: 0;
+    in-out property <string> version;
+    callback navigate(int);
+
+    width: 236px;
+    height: 100%;
+    background: #151d31;
+
+    Rectangle {
+        width: 1px;
+        height: 100%;
+        x: 235px;
+        background: #26314f;
+    }
+
+    VerticalLayout {
+        padding: 18px;
+        spacing: 4px;
+
+        Rectangle {
+            height: 64px;
+
+            Rectangle {
+                width: 44px;
+                height: 44px;
+                border-radius: 14px;
+                background: @linear-gradient(135deg, #ff7a18 0%, #ffb347 100%);
+
+                Image {
+                    width: 34px;
+                    height: 34px;
+                    x: (parent.width - self.width) / 2;
+                    y: (parent.height - self.height) / 2;
+                    source: @image-url("../assets/logo.svg");
+                    image-fit: contain;
+                }
+            }
+
+            Text {
+                x: 56px;
+                y: 8px;
+                text: "Rust";
+                color: #ffffff;
+                font-size: 16px;
+                font-weight: 900;
+            }
+            Text {
+                x: 56px;
+                y: 30px;
+                text: "Academy";
+                color: #ffab4d;
+                font-size: 12px;
+                font-weight: 700;
+            }
+        }
+
+        Rectangle { height: 14px; }
+
+        NavButton { icon-name: "home"; label: "Dashboard"; active: root.page == 0; clicked => { root.navigate(0); } }
+        NavButton { icon-name: "book"; label: "Lessons"; active: root.page == 1 || root.page == 2 || root.page == 3; clicked => { root.navigate(1); } }
+        NavButton { icon-name: "terminal"; label: "Code Lab"; active: root.page == 4; clicked => { root.navigate(4); } }
+        NavButton { icon-name: "layers"; label: "Cheat Sheet"; active: root.page == 5; clicked => { root.navigate(5); } }
+        NavButton { icon-name: "medal"; label: "Achievements"; active: root.page == 6; clicked => { root.navigate(6); } }
+        NavButton { icon-name: "gear"; label: "Settings"; active: root.page == 7 || root.page == 8; clicked => { root.navigate(7); } }
+
+        Rectangle { vertical-stretch: 1; }
+
+        Text {
+            text: "v" + root.version;
+            color: #6d7896;
+            font-size: 11px;
+            horizontal-alignment: center;
+        }
+        Text {
+            text: "Offline-first Rust course";
+            color: #6d7896;
+            font-size: 10px;
+            horizontal-alignment: center;
+        }
+    }
+}
+
+// ============================================================================
+// Main window
+// ============================================================================
+
+export component MainWindow inherits Window {
+    title: "Rust Academy";
+    preferred-width: 1280px;
+    preferred-height: 800px;
+    icon: @image-url("../assets/icon/app-icon.png");
+    background: @linear-gradient(180deg, #0b0f1c 0%, #0e1527 60%, #0d1322 100%);
+
+    in-out property <bool> narrow: self.width < 900px;
+
+    // stat & state
+    in-out property <int> page: 0;
+    in-out property <bool> dark: true;
+    in-out property <int> xp: 0;
+    in-out property <int> streak: 0;
+    in-out property <int> lessons-done: 0;
+    in-out property <int> lessons-total: 0;
+    in-out property <int> quiz-best: 0;
+    in-out property <string> greeting;
+    in-out property <string> lessons-search;
+    in-out property <string> cheat-search;
+    in-out property <int> accent-index: 0;
+    in-out property <bool> reset-armed: false;
+    in-out property <string> version;
+
+    // models
+    in-out property <[LessonInfo]> lessons;
+    in-out property <[ModuleInfo]> modules;
+    in-out property <[LessonInfo]> home-lessons;
+    in-out property <[DayBar]> week;
+    in-out property <[Block]> blocks;
+    in-out property <[CodeLine]> code-lines;
+    in-out property <[QuizQ]> quiz;
+    in-out property <[CheatEntry]> cheatsheet;
+    in-out property <[Achievement]> achievements;
+    in-out property <[VarEntry]> vars;
+    in-out property <[string]> scenario-names;
+    in-out property <[string]> cheat-cats;
+
+    // current lesson
+    in-out property <string> lesson-icon;
+    in-out property <string> lesson-module;
+    in-out property <string> lesson-title;
+    in-out property <string> lesson-subtitle;
+    in-out property <string> lesson-duration;
+    in-out property <string> lesson-xp;
+    in-out property <int> lesson-status;
+    in-out property <string> lesson-best;
+
+    // quiz
+    in-out property <int> quiz-index: 0;
+    in-out property <int> quiz-count: 0;
+    in-out property <int> quiz-correct: 0;
+    in-out property <int> quiz-score: 0;
+    in-out property <bool> quiz-done: false;
+    in-out property <int> quiz-phase: 0;
+    in-out property <string> quiz-progress;
+    in-out property <string> quiz-result;
+    in-out property <string> quiz-result-sub;
+
+    // explorer
+    in-out property <int> scenario: 0;
+    in-out property <string> scenario-title;
+    in-out property <string> scenario-blurb;
+    in-out property <int> current-line: 0;
+    in-out property <string> step-note;
+    in-out property <bool> playing: false;
+
+    in-out property <string> ach-header;
+
+    callback navigate(int);
+    callback open-lesson(int);
+    callback back();
+    callback mark-complete();
+    callback start-quiz();
+    callback quiz-pick(int);
+    callback quiz-next();
+    callback quiz-retry();
+    callback select-scenario(int);
+    callback step-prev();
+    callback step-next();
+    callback step-play();
+    callback lessons-search-changed(string);
+    callback cheat-search-changed(string);
+    callback toggle-cheat(int);
+    callback select-accent(int);
+    callback reset();
+    callback open-about();
+
+    Rectangle {
+        width: 100%;
+        height: 100%;
+        background: @linear-gradient(180deg, #0b0f1c 0%, #0e1527 60%, #0d1322 100%);
+
+        if !root.narrow : HorizontalLayout {
+            width: 100%;
+            height: 100%;
+            spacing: 0px;
+
+            Sidebar {
+                page: root.page;
+                version: root.version;
+                navigate(p) => { root.navigate(p); }
+            }
+
+            Rectangle {
+                horizontal-stretch: 1;
+                vertical-stretch: 1;
+                height: 100%;
+
+                Pages {
+                    width: 100%;
+                    height: 100%;
+                    page: root.page;
+                    xp: root.xp;
+                    streak: root.streak;
+                    lessons-done: root.lessons-done;
+                    quiz-best: root.quiz-best;
+                    lessons-total: root.lessons-total;
+                    greeting: root.greeting;
+                    search: root.page == 1 ? root.lessons-search : root.cheat-search;
+                    accent-index: root.accent-index;
+                    reset-armed: root.reset-armed;
+                    version: root.version;
+
+                    lessons: root.lessons;
+                    modules: root.modules;
+                    home-lessons: root.home-lessons;
+                    week: root.week;
+                    blocks: root.blocks;
+                    code-lines: root.code-lines;
+                    quiz: root.quiz;
+                    cheatsheet: root.cheatsheet;
+                    achievements: root.achievements;
+                    vars: root.vars;
+                    scenario-names: root.scenario-names;
+                    cheat-cats: root.cheat-cats;
+
+                    lesson-icon: root.lesson-icon;
+                    lesson-module: root.lesson-module;
+                    lesson-title: root.lesson-title;
+                    lesson-subtitle: root.lesson-subtitle;
+                    lesson-duration: root.lesson-duration;
+                    lesson-xp: root.lesson-xp;
+                    lesson-status: root.lesson-status;
+                    lesson-best: root.lesson-best;
+
+                    quiz-index: root.quiz-index;
+                    quiz-count: root.quiz-count;
+                    quiz-correct: root.quiz-correct;
+                    quiz-score: root.quiz-score;
+                    quiz-done: root.quiz-done;
+                    quiz-phase: root.quiz-phase;
+                    quiz-progress: root.quiz-progress;
+                    quiz-result: root.quiz-result;
+                    quiz-result-sub: root.quiz-result-sub;
+
+                    scenario: root.scenario;
+                    scenario-title: root.scenario-title;
+                    scenario-blurb: root.scenario-blurb;
+                    current-line: root.current-line;
+                    step-note: root.step-note;
+                    playing: root.playing;
+
+                    ach-header: root.ach-header;
+
+                    navigate(p) => { root.navigate(p); }
+                    open-lesson(id) => { root.open-lesson(id); }
+                    back() => { root.back(); }
+                    mark-complete() => { root.mark-complete(); }
+                    start-quiz() => { root.start-quiz(); }
+                    quiz-pick(o) => { root.quiz-pick(o); }
+                    quiz-next() => { root.quiz-next(); }
+                    quiz-retry() => { root.quiz-retry(); }
+                    select-scenario(i) => { root.select-scenario(i); }
+                    step-prev() => { root.step-prev(); }
+                    step-next() => { root.step-next(); }
+                    step-play() => { root.step-play(); }
+                    search-changed(t) => { root.page == 1 ? root.lessons-search-changed(t) : root.cheat-search-changed(t); }
+                    toggle-cheat(id) => { root.toggle-cheat(id); }
+                    select-accent(i) => { root.select-accent(i); }
+                    reset() => { root.reset(); }
+                    open-about() => { root.open-about(); }
+                }
+            }
+        }
+
+        if root.narrow : Rectangle {
+            width: 100%;
+            height: 100%;
+
+            Pages {
+                width: 100%;
+                height: 100% - 62px;
+                page: root.page;
+                xp: root.xp;
+                streak: root.streak;
+                lessons-done: root.lessons-done;
+                quiz-best: root.quiz-best;
+                lessons-total: root.lessons-total;
+                greeting: root.greeting;
+                search: root.page == 1 ? root.lessons-search : root.cheat-search;
+                accent-index: root.accent-index;
+                reset-armed: root.reset-armed;
+                version: root.version;
+
+                lessons: root.lessons;
+                modules: root.modules;
+                home-lessons: root.home-lessons;
+                week: root.week;
+                blocks: root.blocks;
+                code-lines: root.code-lines;
+                quiz: root.quiz;
+                cheatsheet: root.cheatsheet;
+                achievements: root.achievements;
+                vars: root.vars;
+                scenario-names: root.scenario-names;
+                cheat-cats: root.cheat-cats;
+
+                lesson-icon: root.lesson-icon;
+                lesson-module: root.lesson-module;
+                lesson-title: root.lesson-title;
+                lesson-subtitle: root.lesson-subtitle;
+                lesson-duration: root.lesson-duration;
+                lesson-xp: root.lesson-xp;
+                lesson-status: root.lesson-status;
+                lesson-best: root.lesson-best;
+
+                quiz-index: root.quiz-index;
+                quiz-count: root.quiz-count;
+                quiz-correct: root.quiz-correct;
+                quiz-score: root.quiz-score;
+                quiz-done: root.quiz-done;
+                quiz-phase: root.quiz-phase;
+                quiz-progress: root.quiz-progress;
+                quiz-result: root.quiz-result;
+                quiz-result-sub: root.quiz-result-sub;
+
+                scenario: root.scenario;
+                scenario-title: root.scenario-title;
+                scenario-blurb: root.scenario-blurb;
+                current-line: root.current-line;
+                step-note: root.step-note;
+                playing: root.playing;
+
+                ach-header: root.ach-header;
+
+                navigate(p) => { root.navigate(p); }
+                open-lesson(id) => { root.open-lesson(id); }
+                back() => { root.back(); }
+                mark-complete() => { root.mark-complete(); }
+                start-quiz() => { root.start-quiz(); }
+                quiz-pick(o) => { root.quiz-pick(o); }
+                quiz-next() => { root.quiz-next(); }
+                quiz-retry() => { root.quiz-retry(); }
+                select-scenario(i) => { root.select-scenario(i); }
+                step-prev() => { root.step-prev(); }
+                step-next() => { root.step-next(); }
+                step-play() => { root.step-play(); }
+                search-changed(t) => { root.page == 1 ? root.lessons-search-changed(t) : root.cheat-search-changed(t); }
+                toggle-cheat(id) => { root.toggle-cheat(id); }
+                select-accent(i) => { root.select-accent(i); }
+                reset() => { root.reset(); }
+                open-about() => { root.open-about(); }
+            }
+
+            Rectangle {
+                width: 100%;
+                height: 62px;
+                y: parent.height - 62px;
+                background: #151d31;
+
+                Rectangle {
+                    width: 100%;
+                    height: 1px;
+                    background: #26314f;
+                }
+
+                HorizontalLayout {
+                    padding: 4px;
+                    spacing: 2px;
+                    alignment: center;
+
+                    NavButton { icon-name: "home"; label: "Home"; narrow: true; width: (parent.width - 16px) / 5; active: root.page == 0; clicked => { root.navigate(0); } }
+                    NavButton { icon-name: "book"; label: "Learn"; narrow: true; width: (parent.width - 16px) / 5; active: root.page == 1 || root.page == 2 || root.page == 3; clicked => { root.navigate(1); } }
+                    NavButton { icon-name: "terminal"; label: "Lab"; narrow: true; width: (parent.width - 16px) / 5; active: root.page == 4; clicked => { root.navigate(4); } }
+                    NavButton { icon-name: "layers"; label: "Cheat"; narrow: true; width: (parent.width - 16px) / 5; active: root.page == 5; clicked => { root.navigate(5); } }
+                    NavButton { icon-name: "gear"; label: "More"; narrow: true; width: (parent.width - 16px) / 5; active: root.page == 6 || root.page == 7 || root.page == 8; clicked => { root.navigate(7); } }
+                }
+            }
+        }
+    }
+}

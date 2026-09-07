@@ -1,0 +1,92 @@
+[package]
+name = "rust-academy"
+version = "0.1.0"
+authors = ["Rust Academy"]
+edition = "2021"
+rust-version = "1.75"
+description = "Rust Academy - a beautiful, modern Rust programming course for Android and Windows"
+license = "MIT"
+build = "build.rs"
+
+[lib]
+name = "rust_academy"
+crate-type = ["cdylib", "rlib"]
+
+[[bin]]
+name = "rust-academy"
+path = "src/main.rs"
+
+[dependencies]
+slint = { version = "=1.8.0", default-features = false, features = [
+    "std",
+    "backend-winit",
+    "backend-android-activity-06",
+    "renderer-femtovg",
+    "renderer-software",
+    "renderer-winit-software",
+    "compat-1-2",
+] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[build-dependencies]
+slint-build = "=1.8.0"
+
+[target.'cfg(windows)'.build-dependencies]
+winres = "0.1"
+
+# Slint 1.8's Android backend needs a small patch to run on Android 7 (API 24/25):
+#  - the official backend loads its Java helper with InMemoryDexClassLoader (API 26+)
+#  - the Java helper uses BlendMode (API 29+)
+#  - the Java helper uses Menu.setGroupDividerEnabled (API 28+)
+# The vendored copy lives in vendor/slint-android-backend and is downloaded +
+# patched by scripts/prepare-vendor.sh before building the APK.
+[patch.crates-io]
+i-slint-backend-android-activity = { path = "vendor/slint-android-backend" }
+
+# ---------------------------------------------------------------------------
+# Android packaging configuration, consumed by `cargo apk` (ndk-build).
+#
+# NOTE: `cargo apk` refuses to accept version_name/version_code here — it
+# derives both from `[package] version` (semver). The release workflow replaces
+# that version with the one typed into the workflow_dispatch prompt before it
+# builds, so the APK/EXE and the GitHub release always carry the same version.
+# ---------------------------------------------------------------------------
+[package.metadata.android]
+apk_name = "rust-academy"
+package = "com.rustacademy.app"
+# aarch64 covers virtually every Android 7+ phone/tablet, x86_64 covers all
+# emulators and Chromebooks. armv7 builds are intentionally omitted because
+# rust-skia publishes no prebuilt 32-bit ARM binaries.
+build_targets = ["aarch64-linux-android", "x86_64-linux-android"]
+resources = "res"
+
+# Self-signed release key committed to the repository so that every release
+# shipped from the workflow is signed with the SAME key (Android requires that
+# for in-place app updates). Replace it with your own key before publishing to
+# a public store — see keystore/README.md.
+[package.metadata.android.signing.release]
+path = "keystore/rust-academy-release.p12"
+keystore_password = "rust-academy-release"
+
+[package.metadata.android.sdk]
+min_sdk_version = 24
+target_sdk_version = 35
+
+[package.metadata.android.application]
+label = "Rust Academy"
+icon = "@mipmap/ic_launcher"
+has_code = false
+theme = "@android:style/Theme.Material.NoActionBar"
+
+[package.metadata.android.application.activity]
+name = "android.app.NativeActivity"
+exported = true
+config_changes = "orientation|keyboard|keyboardHidden|navigation|screenLayout|screenSize|smallestScreenSize|uiMode|density"
+
+[profile.release]
+opt-level = 2
+lto = "thin"
+codegen-units = 1
+strip = "symbols"
+panic = "abort"

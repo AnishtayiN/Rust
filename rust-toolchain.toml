@@ -1,0 +1,14 @@
+# Rust 1.75.0 is the last Rust version that can produce binaries that run on
+# Windows 7. The whole project (both the Windows .exe and the Android .apk) is
+# built with this toolchain so that both targets keep maximum compatibility.
+[toolchain]
+channel = "1.75.0"
+profile = "minimal"
+targets = [
+    # Windows executable (Windows 7 - 11)
+    "x86_64-pc-windows-msvc",
+    # Android APK (Android 7.0 - latest). armv7 is intentionally omitted:
+    # rust-skia publishes no prebuilt 32-bit ARM binaries.
+    "aarch64-linux-android",
+    "x86_64-linux-android",
+]

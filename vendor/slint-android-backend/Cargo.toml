@@ -1,0 +1,65 @@
+# Vendored copy of Slint 1.8.0's i-slint-backend-android-activity.
+#
+# This copy is pinned at the exact upstream version and carries a small patch so
+# the app can run on Android 7.0 (API 24):
+#
+#   * javahelper.rs loads the Java helper dex with DexClassLoader from a file
+#     in the app's internal storage instead of InMemoryDexClassLoader (API 26+).
+#   * java/SlintAndroidJavaHelper.java uses PorterDuffColorFilter instead of
+#     BlendModeColorFilter (API 29+), and guards Menu.setGroupDividerEnabled
+#     with Build.VERSION.SDK_INT >= 28.
+#
+# scripts/prepare-vendor.sh regenerates this directory from the upstream
+# v1.8.0 source and re-applies the patches, so this copy stays reproducible.
+#
+# The only differences from upstream are the three code changes above, plus the
+# Cargo.toml below: because this crate is patched in from a path outside the
+# Slint workspace, all `workspace = true` fields and dependencies are replaced
+# with their concrete values.
+
+[package]
+name = "i-slint-backend-android-activity"
+description = "OpenGL rendering backend for Slint"
+version = "1.8.0"
+authors = ["Slint Developers <info@slint.dev>"]
+edition = "2021"
+homepage = "https://slint.dev"
+license = "GPL-3.0-only OR LicenseRef-Slint-Royalty-free-2.0 OR LicenseRef-Slint-Software-3.0"
+repository = "https://github.com/slint-ui/slint"
+rust-version = "1.75"
+
+[lib]
+path = "lib.rs"
+
+[features]
+game-activity = [
+    "android-activity-06?/game-activity",
+    "android-activity-05?/game-activity",
+]
+native-activity = [
+    "android-activity-06?/native-activity",
+    "android-activity-05?/native-activity",
+]
+aa-06 = ["android-activity-06", "ndk-09"]
+aa-05 = ["android-activity-05", "ndk-08"]
+
+[target.'cfg(target_os = "android")'.dependencies]
+i-slint-renderer-skia = { version = "=1.8.0", default-features = false }
+i-slint-core = { version = "=1.8.0", features = ["std"] }
+raw-window-handle = { version = "0.6" }
+android-activity-05 = { package = "android-activity", version = "0.5", optional = true }
+android-activity-06 = { package = "android-activity", version = "0.6", optional = true }
+jni = { version = "0.21", features = ["invocation"] }
+
+# We only depend on the NDK directly to enable raw-window-handle 0.6 which we need for the skia renderer
+ndk-08 = { package = "ndk", version = "0.8.0", optional = true, features = ["rwh_06"] }
+ndk-09 = { package = "ndk", version = "0.9.0", optional = true, features = ["rwh_06"], default-features = false }
+
+[package.metadata.docs.rs]
+targets = [
+    "aarch64-linux-android",
+    "armv7-linux-androideabi",
+    "i686-linux-android",
+    "x86_64-linux-android",
+]
+features = ["native-activity", "aa-06"]

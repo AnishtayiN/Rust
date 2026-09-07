@@ -1,0 +1,165 @@
+name: Release
+
+# Manual-only release pipeline. The version typed into the `workflow_dispatch`
+# dialog is used for:
+#   * the `[package] version` in Cargo.toml  -> APK versionName/versionCode + EXE resources
+#   * the artifact names
+#   * the Git tag / GitHub release (v<version>)
+#
+# The release contains exactly two artifacts:
+#   * rust-academy-<version>-android.apk  (Android 7.0 / API 24 -> latest)
+#   * rust-academy-<version>-windows.exe  (Windows 7 -> Windows 11)
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "App version to release (semver, e.g. 1.0.0)"
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  windows:
+    name: Windows executable (Windows 7 - 11)
+    runs-on: windows-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      # rust-toolchain.toml pins Rust 1.75.0 (the last toolchain that can
+      # produce Windows 7 compatible binaries) and the needed targets; the
+      # first `cargo` invocation installs them automatically.
+
+      - name: Apply the requested version
+        shell: bash
+        run: |
+          python -c "
+          import re, pathlib
+          p = pathlib.Path('Cargo.toml')
+          s = p.read_text(encoding='utf-8')
+          s = re.sub(r'(?m)^version = \".*\"\$', 'version = \"${{ inputs.version }}\"', s, count=1)
+          p.write_text(s, encoding='utf-8')
+          "
+
+      - name: Build release executable
+        shell: bash
+        env:
+          RUST_ACADEMY_VERSION: ${{ inputs.version }}
+        run: |
+          cargo build --release --bin rust-academy
+
+      - name: Rename artifact
+        shell: bash
+        run: |
+          mkdir -p dist
+          cp target/release/rust-academy.exe "dist/rust-academy-${{ inputs.version }}-windows.exe"
+
+      - name: Upload Windows executable
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-exe
+          path: dist/rust-academy-${{ inputs.version }}-windows.exe
+          if-no-files-found: error
+
+  android:
+    name: Android APK (Android 7.0 - latest)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Install JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Install Android SDK command line tools
+        uses: android-actions/setup-android@v3
+
+      - name: Install Android platform, build-tools and NDK
+        run: |
+          yes | sdkmanager --licenses >/dev/null
+          sdkmanager "platforms;android-35" \
+                     "build-tools;35.0.0" \
+                     "ndk;26.1.10909125"
+
+      # rust-toolchain.toml pins Rust 1.75.0 + the Android targets; the first
+      # `cargo` invocation installs them automatically.
+
+      - name: Install cargo-apk with a stable toolchain
+        shell: bash
+        run: |
+          rustup toolchain install stable --profile minimal
+          rustup run stable cargo install cargo-apk --locked --version 0.9.7 --root /tmp/cargo-apk
+          echo "/tmp/cargo-apk/bin" >> "$GITHUB_PATH"
+
+      - name: Apply the requested version
+        run: |
+          python -c "
+          import re, pathlib
+          p = pathlib.Path('Cargo.toml')
+          s = p.read_text(encoding='utf-8')
+          s = re.sub(r'(?m)^version = \".*\"\$', 'version = \"${{ inputs.version }}\"', s, count=1)
+          p.write_text(s, encoding='utf-8')
+          "
+
+      - name: Vendor + patch Slint's Android backend for API 24
+        run: |
+          bash scripts/prepare-vendor.sh
+
+      - name: Build release APK
+        env:
+          ANDROID_HOME: ${{ env.ANDROID_SDK_ROOT }}
+          ANDROID_NDK_ROOT: ${{ env.ANDROID_SDK_ROOT }}/ndk/26.1.10909125
+          RUST_ACADEMY_VERSION: ${{ inputs.version }}
+        run: |
+          cargo apk build --release --lib
+
+      - name: Rename artifact
+        run: |
+          mkdir -p dist
+          cp target/release/apk/rust-academy.apk "dist/rust-academy-${{ inputs.version }}-android.apk"
+
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-apk
+          path: dist/rust-academy-${{ inputs.version }}-android.apk
+          if-no-files-found: error
+
+  release:
+    name: Publish GitHub release
+    needs: [windows, android]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download both artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: release-assets
+          merge-multiple: true
+
+      - name: Verify exactly two artifacts exist
+        run: |
+          ls -la release-assets
+          count=$(find release-assets -maxdepth 1 -type f | wc -l)
+          test "$count" -eq 2 || { echo "Expected exactly 2 artifacts, found $count"; exit 1; }
+          test -f "release-assets/rust-academy-${{ inputs.version }}-android.apk"
+          test -f "release-assets/rust-academy-${{ inputs.version }}-windows.exe"
+
+      - name: Create GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "v${{ inputs.version }}" \
+            "release-assets/rust-academy-${{ inputs.version }}-android.apk" \
+            "release-assets/rust-academy-${{ inputs.version }}-windows.exe" \
+            --title "Rust Academy ${{ inputs.version }}" \
+            --notes "Rust Academy ${{ inputs.version }}
+
+          **Android**: install the APK (Android 7.0 and newer).
+          **Windows**: run the executable (Windows 7 and newer).
+
+          Built from commit ${{ github.sha }} on branch \`${{ github.ref_name }}\`."
