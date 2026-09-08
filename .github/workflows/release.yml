@@ -2,13 +2,21 @@ name: Release
 
 # Manual-only release pipeline. The version typed into the `workflow_dispatch`
 # dialog is used for:
-#   * the `[package] version` in Cargo.toml  -> APK versionName/versionCode + EXE resources
+#   * the `[package] version` in Cargo.toml (+ Cargo.lock) -> APK
+#     versionName/versionCode + EXE resources
 #   * the artifact names
 #   * the Git tag / GitHub release (v<version>)
 #
 # The release contains exactly two artifacts:
 #   * rust-academy-<version>-android.apk  (Android 7.0 / API 24 -> latest)
 #   * rust-academy-<version>-windows.exe  (Windows 7 -> Windows 11)
+#
+# Both jobs build with `--locked`: the toolchain is pinned to Rust 1.75 (the
+# last one that produces Windows 7 binaries) and cargo 1.75 cannot parse the
+# manifest of any crate published with edition 2024, so the dependency graph
+# must come from the committed, MSRV-resolved Cargo.lock instead of a fresh
+# resolution.  Run `./scripts/refresh-lockfile.sh` (or the `CI` workflow with
+# "refresh lockfile" enabled) when dependencies have to move.
 on:
   workflow_dispatch:
     inputs:
@@ -34,21 +42,14 @@ jobs:
 
       - name: Apply the requested version
         shell: bash
-        run: |
-          python -c "
-          import re, pathlib
-          p = pathlib.Path('Cargo.toml')
-          s = p.read_text(encoding='utf-8')
-          s = re.sub(r'(?m)^version = \".*\"\$', 'version = \"${{ inputs.version }}\"', s, count=1)
-          p.write_text(s, encoding='utf-8')
-          "
+        run: python scripts/set-version.py "${{ inputs.version }}"
 
       - name: Build release executable
         shell: bash
         env:
           RUST_ACADEMY_VERSION: ${{ inputs.version }}
         run: |
-          cargo build --release --bin rust-academy
+          cargo build --release --bin rust-academy --locked
 
       - name: Rename artifact
         shell: bash
@@ -90,32 +91,28 @@ jobs:
       # `cargo` invocation installs them automatically.
 
       - name: Install cargo-apk with a stable toolchain
-        shell: bash
         run: |
           rustup toolchain install stable --profile minimal
           rustup run stable cargo install cargo-apk --locked --version 0.9.7 --root /tmp/cargo-apk
           echo "/tmp/cargo-apk/bin" >> "$GITHUB_PATH"
 
       - name: Apply the requested version
-        run: |
-          python -c "
-          import re, pathlib
-          p = pathlib.Path('Cargo.toml')
-          s = p.read_text(encoding='utf-8')
-          s = re.sub(r'(?m)^version = \".*\"\$', 'version = \"${{ inputs.version }}\"', s, count=1)
-          p.write_text(s, encoding='utf-8')
-          "
+        run: python3 scripts/set-version.py "${{ inputs.version }}"
 
       - name: Vendor + patch Slint's Android backend for API 24
-        run: |
-          bash scripts/prepare-vendor.sh
+        run: bash scripts/prepare-vendor.sh
+
+      - name: Check that Cargo.lock is in sync
+        # `cargo apk` does not forward flags such as --locked to the inner
+        # cargo call, so assert the lockfile is both readable by cargo 1.75 and
+        # in sync with Cargo.toml before handing control to cargo-apk.
+        run: cargo metadata --locked --format-version 1 > /dev/null
 
       - name: Build release APK
         env:
-          ANDROID_HOME: ${{ env.ANDROID_SDK_ROOT }}
-          ANDROID_NDK_ROOT: ${{ env.ANDROID_SDK_ROOT }}/ndk/26.1.10909125
           RUST_ACADEMY_VERSION: ${{ inputs.version }}
         run: |
+          export ANDROID_NDK_ROOT="${ANDROID_HOME}/ndk/26.1.10909125"
           cargo apk build --release --lib
 
       - name: Rename artifact

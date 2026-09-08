@@ -1,0 +1,40 @@
+# Transitive dependencies that must stay pinned to a version older than the
+# newest release, because they do not declare a `rust-version` even though
+# their code needs a newer compiler than this project's MSRV (Rust 1.75, kept
+# for Windows 7 support -- see README.md).
+#
+# `scripts/msrv-autopin.py` re-applies every pin here after each MSRV-aware
+# resolution, so refreshing the lockfile cannot undo them.  It also re-checks
+# them at the end of a run, and `scripts/check-msrv-lock.py` fails the build if
+# the lockfile drifted away from a pin.
+#
+# Format: `crate = "locked version"`.
+
+# Editing Cargo.lock by hand for a pin means removing the dependencies that
+# only the newer release needed as well: `core_maths` left the graph with
+# fontdue 0.9.4, and a lockfile that still carries it is refused by every
+# `cargo --locked` build.  ./scripts/refresh-lockfile.sh (or
+# scripts/diagnose-lockfile.sh, which shows the difference) is what keeps the
+# graph consistent; check-msrv-lock.py warns about leftovers.  Drop an entry once the upstream crate
+# declares a correct `rust-version` (then the resolver avoids it by itself) or
+# once the project's MSRV moves past its real requirement.
+[pins]
+
+# rowan 0.15.16..0.15.17 declare rust-version = 1.77 (so the resolver skips
+# them), but 0.15.18 and 0.15.19 dropped that declaration again while still
+# using `ptr_addr_eq`, stable only since Rust 1.76.  Without this pin a fresh
+# resolution picks 0.15.19 and both release builds die with
+#   error[E0658]: use of unstable library feature 'ptr_addr_eq'
+# on `rowan`, pulled in by i-slint-compiler 1.8 (`rowan = "^0.15"`).
+rowan = "0.15.15"
+
+# fontdue 0.9.4 (Jul 2026) calls `cast_signed` on integer primitives, an item
+# that does not exist in Rust 1.75, and -- like rowan -- it declares no
+# rust-version, so the MSRV-aware resolver picks it over 0.9.3 (Feb 2025,
+# whose dependency set is otherwise identical).  Without this pin both release
+# builds die with
+#   error[E0599]: no function or associated item named `cast_signed`
+#   error: could not compile `fontdue` (lib)
+# fontdue is pulled in by i-slint-core / i-slint-compiler 1.8 (`^0.9.0`) for the
+# software renderer's font handling.
+fontdue = "0.9.3"

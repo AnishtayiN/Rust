@@ -1,0 +1,279 @@
+name: CI
+
+# Build check for both shipping artifacts (Windows .exe + Android .apk), with
+# no publishing.  It guards the two things that keep breaking this repo:
+#
+#   1. Dependency drift.  The toolchain is pinned to Rust 1.75 (the last one
+#      that produces Windows 7 binaries) and cargo 1.75 cannot even parse the
+#      manifest of a crate published with edition 2024, which shows up as
+#      "feature `edition2024` is required" while downloading crates.  The
+#      defence is a committed Cargo.lock produced by an MSRV-aware resolver
+#      (see "Staying on Rust 1.75" in the README); this workflow audits it and
+#      refuses a lock that the pinned toolchain cannot use.
+#   2. Anything else that would make the release builds fail — the same build
+#      commands as .github/workflows/release.yml are run here.
+#
+# Run it manually with "Re-resolve with the MSRV-aware resolver" ticked to test
+# a dependency refresh: the lock is regenerated, verified, and both platforms are
+# built against it before you commit anything.
+
+on:
+  workflow_dispatch:
+    inputs:
+      refresh_lockfile:
+        description: "Re-resolve with the MSRV-aware resolver and build with that lockfile"
+        required: false
+        type: boolean
+        default: false
+  pull_request:
+  push:
+    # `main` only ever verifies the committed lockfile.  Pushing a branch with
+    # pending dependency work asks CI to re-resolve with the MSRV-aware
+    # resolver, verify it by building it, and commit the lock cargo wrote back
+    # to that branch (see "Publish the lockfile"): that is how a crate that
+    # needs a newer compiler than it declares gets pinned down without anyone
+    # hand-editing Cargo.lock.
+    branches: [main, "fix/**", "arena/**"]
+
+permissions:
+  contents: read
+  # a failing job reports itself as a comment on the pull request (see
+  # scripts/ci-diagnostics.sh); nothing else writes
+  pull-requests: write
+
+
+env:
+  # Must match the channel in rust-toolchain.toml.
+  RUST_ACADEMY_MSRV: 1.75.0
+
+jobs:
+  lockfile:
+    name: Cargo.lock is MSRV-safe
+    runs-on: ubuntu-latest
+    # A job-level `permissions` block replaces the workflow-level one entirely,
+    # so both keys have to be restated here.  Nothing in this workflow pushes.
+    permissions:
+      contents: write        # only for the commit-comment fallback of
+                             # scripts/ci-diagnostics.sh
+      pull-requests: write   # so that a failing run can report on the PR
+    outputs:
+      # true when this run generated the lockfile the build jobs should use
+      generated: ${{ steps.resolve.outputs.generated }}
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Refresh the lockfile when asked to (or when none is committed)
+        id: resolve
+        run: |
+          set -o pipefail
+          # A push to a branch other than the default one is a request to
+          # refresh: whoever pushes it is the one fixing the lockfile.
+          refresh="${{ inputs.refresh_lockfile }}"
+          default="${{ github.event.repository.default_branch }}"
+          if [ "$refresh" = "true" ] || [ ! -f Cargo.lock ] || {
+               [ "${{ github.event_name }}" = "push" ] && [ "$GITHUB_REF_NAME" != "$default" ]
+             }; then
+            RESOLVE_TOOLCHAIN=stable ./scripts/refresh-lockfile.sh --full 2>&1 | tee "${RUNNER_TEMP:-/tmp}/step.log"
+            echo "generated=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "generated=false" >> "$GITHUB_OUTPUT"
+            echo "Using the committed Cargo.lock; nothing to resolve."
+          fi
+
+      - name: Verify the lockfile with the pinned toolchain
+        run: |
+          set -o pipefail
+          # `cargo` here is the pinned 1.75.0 toolchain (rust-toolchain.toml):
+          # `fetch --locked` downloads and unpacks every locked crate, so it
+          # fails on the first manifest this cargo cannot parse, and --locked
+          # proves the lock is in sync with Cargo.toml.
+          { cargo fetch --locked; python3 scripts/check-msrv-lock.py; } 2>&1 | tee "${RUNNER_TEMP:-/tmp}/verify.log"
+
+      # Cargo only says "the lockfile needs to be updated" when --locked is
+      # refused, never where it disagrees.  Run the helper that answers that: it
+      # re-resolves with cargo, re-applies scripts/msrv-pins.toml, prints the
+      # pinned crates from both lockfiles side by side and reports whether the
+      # regenerated one is accepted (the committed one is restored afterwards).
+      # The report ends up as a comment on the pull request via
+      # scripts/ci-diagnostics.sh.
+      - name: Diagnose the lockfile
+        if: failure()
+        run: bash scripts/diagnose-lockfile.sh
+
+      # A freshly generated lockfile has never been compiled, and a manifest
+      # scan cannot catch every offender: rowan 0.15.18/0.15.19, for example,
+      # need `ptr_addr_eq` (stable since Rust 1.76) while declaring no
+      # rust-version at all, so cargo 1.75 happily resolves them and only the
+      # build notices.  Use a real build as the oracle: msrv-autopin.py
+      # downgrades whatever fails to compile, re-applies scripts/msrv-pins.toml
+      # and leaves anything unrelated to dependency versions alone.  Android-only
+      # dependencies (the vendored jni / android-activity stack) are left to the
+      # `android` job below, whose real build is the judge there.
+      - name: Re-pin against the compiler (refresh runs only)
+        if: ${{ steps.resolve.outputs.generated == 'true' }}
+        continue-on-error: true
+        run: |
+          set -o pipefail
+          rustup target add --toolchain "$RUST_ACADEMY_MSRV" x86_64-pc-windows-msvc
+          python3 scripts/msrv-autopin.py --msrv "$RUST_ACADEMY_MSRV" \
+            --resolve-toolchain stable --msrv-toolchain "$RUST_ACADEMY_MSRV" \
+            --oracle "cargo +$RUST_ACADEMY_MSRV check --locked --workspace --target x86_64-pc-windows-msvc" \
+            2>&1 | tee "${RUNNER_TEMP:-/tmp}/oracle.log"
+          # The oracle may have moved packages; re-run the two real checks so
+          # that the uploaded lockfile is the verified one.
+          cargo fetch --locked
+          python3 scripts/check-msrv-lock.py
+
+      - name: Note when newer MSRV-compatible releases exist
+        run: |
+          # Informational only — a green build with the committed lockfile is
+          # what matters, the warning tells you when it is worth refreshing.
+          rustup toolchain install stable --profile minimal >/dev/null
+          set +e
+          # Report the dependencies that no static check can vouch for: locked
+          # releases published after the pinned toolchain that declare no
+          # rust-version at all.  If one of them ever fails to compile, pin the
+          # newest release from before the toolchain date in scripts/msrv-pins.toml.
+          python3 scripts/msrv-autopin.py --list --suggest-pins >"${RUNNER_TEMP:-/tmp}/suspects.log" 2>&1
+          cat "${RUNNER_TEMP:-/tmp}/suspects.log"
+          count=$(grep -oE '^[0-9]+ locked crate' "${RUNNER_TEMP:-/tmp}/suspects.log" | grep -oE '^[0-9]+')
+          if [ "${count:-0}" -gt 0 ]; then
+            echo "::warning::${count} locked dependencies are published after Rust ${RUST_ACADEMY_MSRV} and declare no rust-version; the two build jobs are the only proof they work"
+          fi
+          cargo +stable update --dry-run --config 'resolver.incompatible-rust-versions="fallback"' \
+            | tee "${RUNNER_TEMP:-/tmp}/drift.log"
+          status=$?
+          set -e
+          if [ "$status" -ne 0 ]; then
+            echo "::warning::a fresh MSRV-aware resolution currently fails; keep the committed Cargo.lock"
+          elif grep -qE '^ +Updating|^ +Adding|^ +Removing' "${RUNNER_TEMP:-/tmp}/drift.log"; then
+            echo "::warning::Cargo.lock differs from a fresh MSRV-aware resolution (new dependency releases were published). Run ./scripts/refresh-lockfile.sh and commit Cargo.lock when convenient."
+          else
+            echo "Cargo.lock matches a fresh MSRV-aware resolution."
+          fi
+
+      # Cargo wrote this lockfile itself, so it is the copy that both honours
+      # the pins and builds; the generated artifact otherwise dies with the
+      # runner.  `[skip ci]` stops the commit from re-triggering this workflow.
+      # Never on the default branch, where CI only verifies.
+      - name: Publish the lockfile
+        if: github.event_name == 'push' && github.ref != format('refs/heads/{0}', github.event.repository.default_branch)
+        run: |
+          set -euo pipefail
+          if git diff --quiet -- Cargo.lock; then
+            echo "Cargo.lock already holds what a re-resolution produces"
+            exit 0
+          fi
+          toolchain=$(sed -n 's/^channel *= *"\(.*\)"/\1/p' rust-toolchain.toml | tr -d '"')
+          git add Cargo.lock
+          git -c user.name=github-actions[bot] -c user.email=41898282+github-actions[bot]@users.noreply.github.com \
+            commit -m "Cargo.lock: re-resolved for Rust ${toolchain:-the pinned toolchain} [skip ci]"
+          git push origin "HEAD:$GITHUB_REF_NAME"
+          echo "::notice::the resolved lockfile was committed back to $GITHUB_REF_NAME"
+
+      - name: Upload the generated lockfile
+        if: ${{ steps.resolve.outputs.generated == 'true' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: cargo-lock
+          path: Cargo.lock
+          if-no-files-found: error
+
+      - name: Publish diagnostics
+        if: failure()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GITHUB_PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: bash scripts/ci-diagnostics.sh
+
+  windows:
+    name: Windows executable (Windows 7 - 11)
+    runs-on: windows-latest
+    needs: lockfile
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Use the freshly generated lockfile
+        if: ${{ needs.lockfile.outputs.generated == 'true' }}
+        uses: actions/download-artifact@v4
+        with:
+          name: cargo-lock
+          path: .
+
+      - name: Build release executable
+        env:
+          RUST_ACADEMY_VERSION: 0.0.0-ci
+        shell: bash
+        run: |
+          set -o pipefail
+          cargo build --release --bin rust-academy --locked 2>&1 | tee "${RUNNER_TEMP:-/tmp}/build.log"
+
+      - name: Publish diagnostics
+        if: failure()
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GITHUB_PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: bash scripts/ci-diagnostics.sh
+
+  android:
+    name: Android APK (Android 7.0 - latest)
+    runs-on: ubuntu-latest
+    needs: lockfile
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Install JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Install Android SDK command line tools
+        uses: android-actions/setup-android@v3
+
+      - name: Install Android platform, build-tools and NDK
+        run: |
+          yes | sdkmanager --licenses >/dev/null
+          sdkmanager "platforms;android-35" \
+                     "build-tools;35.0.0" \
+                     "ndk;26.1.10909125"
+
+      - name: Install cargo-apk with a stable toolchain
+        run: |
+          rustup toolchain install stable --profile minimal
+          rustup run stable cargo install cargo-apk --locked --version 0.9.7 --root /tmp/cargo-apk
+          echo "/tmp/cargo-apk/bin" >> "$GITHUB_PATH"
+
+      - name: Use the freshly generated lockfile
+        if: ${{ needs.lockfile.outputs.generated == 'true' }}
+        uses: actions/download-artifact@v4
+        with:
+          name: cargo-lock
+          path: .
+
+      - name: Vendor + patch Slint's Android backend for API 24
+        run: bash scripts/prepare-vendor.sh
+
+      - name: Check that Cargo.lock is in sync
+        # cargo-apk cannot forward flags such as --locked to the inner cargo
+        # invocation, so assert the lockfile is readable by cargo 1.75 and in
+        # sync with Cargo.toml before handing control over to it.
+        run: cargo metadata --locked --format-version 1 > /dev/null
+
+      - name: Build release APK
+        run: |
+          export ANDROID_NDK_ROOT="${ANDROID_HOME}/ndk/26.1.10909125"
+          export RUST_ACADEMY_VERSION=0.0.0-ci
+          set -o pipefail
+          cargo apk build --release --lib 2>&1 | tee "${RUNNER_TEMP:-/tmp}/build.log"
+
+      - name: Publish diagnostics
+        if: failure()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GITHUB_PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: bash scripts/ci-diagnostics.sh

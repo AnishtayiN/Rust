@@ -84,6 +84,13 @@ name = "android.app.NativeActivity"
 exported = true
 config_changes = "orientation|keyboard|keyboardHidden|navigation|screenLayout|screenSize|smallestScreenSize|uiMode|density"
 
+# `released` is the date of the toolchain pinned in rust-toolchain.toml.  It is
+# not read by cargo: `scripts/msrv-autopin.py --suggest-pins` uses it to point at
+# dependencies that were published *after* that toolchain and declare no
+# `rust-version`, i.e. the ones no MSRV check can vouch for (see the README).
+[package.metadata.msrv]
+released = "2023-12-28"
+
 [profile.release]
 opt-level = 2
 lto = "thin"
